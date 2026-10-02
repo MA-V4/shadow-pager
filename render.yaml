@@ -11,3 +11,12 @@ services:
         value: production
       - key: LOG_LEVEL
         value: info
+      # Slack secrets are typed into the Render dashboard and never stored in this file.
+      - key: SLACK_APP_TOKEN
+        sync: false
+      - key: SLACK_BOT_TOKEN
+        sync: false
+      - key: SLACK_INVITE_USER_IDS
+        sync: false
+      - key: SLACK_ANNOUNCE_CHANNEL_ID
+        sync: false
