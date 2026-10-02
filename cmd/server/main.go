@@ -43,6 +43,7 @@ func main() {
 // config holds every tunable the process reads at startup. Values come from
 // the environment so the same binary runs locally and on Render unchanged.
 type config struct {
+	Host            string
 	Port            string
 	Env             string
 	LogLevel        slog.Level
@@ -55,6 +56,7 @@ type config struct {
 // Injecting getenv instead of calling os.Getenv keeps it trivially testable.
 func loadConfig(getenv func(string) string) (config, error) {
 	cfg := config{
+		Host:            getenv("HOST"),                // empty means listen on every network, which Render needs
 		Port:            envOr(getenv, "PORT", "8080"), // Render injects PORT
 		Env:             envOr(getenv, "APP_ENV", "development"),
 		LogLevel:        slog.LevelInfo,
@@ -157,9 +159,10 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 
 	// Binding before serving surfaces "address already in use" synchronously,
 	// so we never log "listening" for a server that is not.
-	ln, err := net.Listen("tcp", net.JoinHostPort("", cfg.Port))
+	addr := net.JoinHostPort(cfg.Host, cfg.Port)
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("listen on port %s: %w", cfg.Port, err)
+		return fmt.Errorf("listen on %s: %w", addr, err)
 	}
 
 	// The engine deliberately does NOT inherit the signal context. On SIGTERM
