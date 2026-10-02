@@ -167,6 +167,10 @@ type Engine struct {
 	subs    map[uint64]chan MetricSample
 	nextSub uint64
 
+	eventSubs     map[uint64]chan Event
+	nextEventSub  uint64
+	eventsDropped atomic.Uint64 // events thrown away because a listener was full
+
 	running atomic.Bool
 	dropped atomic.Uint64 // samples thrown away because a listener was too slow
 }
@@ -196,6 +200,7 @@ func NewEngine(cfg Config, logger *slog.Logger, opts ...Option) (*Engine, error)
 		generators: make(map[FailureMode]Generator),
 		sims:       make(map[SimulationID]*Simulation),
 		subs:       make(map[uint64]chan MetricSample),
+		eventSubs:  make(map[uint64]chan Event),
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -246,6 +251,7 @@ func (e *Engine) tick(ctx context.Context) {
 		if !now.Before(sim.EndsAt) {
 			sim.State, sim.EndedAt = StateResolved, &now
 			e.log.InfoContext(ctx, "simulation resolved", slog.String("simulation_id", string(sim.ID)))
+			e.emitLocked(ctx, Event{Type: EventSimulationResolved, Simulation: *sim})
 			continue
 		}
 		active = append(active, *sim)
@@ -314,6 +320,7 @@ func (e *Engine) Inject(ctx context.Context, sc Scenario) (Simulation, error) {
 		return Simulation{}, fmt.Errorf("inject: %w (%d)", ErrCapacity, e.cfg.MaxActive)
 	}
 	e.sims[id] = sim
+	e.emitLocked(ctx, Event{Type: EventSimulationStarted, Simulation: *sim})
 
 	e.log.InfoContext(ctx, "simulation injected",
 		slog.String("simulation_id", string(id)),
@@ -342,6 +349,7 @@ func (e *Engine) Halt(ctx context.Context, id SimulationID) (Simulation, error) 
 	}
 	ended := e.now()
 	sim.State, sim.EndedAt = StateHalted, &ended
+	e.emitLocked(ctx, Event{Type: EventSimulationHalted, Simulation: *sim})
 
 	e.log.InfoContext(ctx, "simulation halted", slog.String("simulation_id", string(id)))
 	return *sim, nil
