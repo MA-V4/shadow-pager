@@ -22,6 +22,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/MA-V4/shadow-pager/internal/api"
 	"github.com/MA-V4/shadow-pager/internal/chaos"
 )
 
@@ -137,8 +138,12 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 	// failing and the platform stops routing new traffic to this instance.
 	var draining atomic.Bool
 
+	// Open streams watch this context so they hang up when the server starts to turn off.
+	streamCtx, cancelStreams := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancelStreams()
+
 	srv := &http.Server{
-		Handler:           newRouter(logger, engine, &draining),
+		Handler:           newRouter(logger, engine, api.NewHandler(engine, logger, streamCtx), &draining),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		// Streaming handlers (Phase 3) extend their own deadline through
@@ -148,6 +153,7 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 		MaxHeaderBytes: 1 << 20,
 		ErrorLog:       slog.NewLogLogger(logger.Handler(), slog.LevelError),
 	}
+	srv.RegisterOnShutdown(cancelStreams)
 
 	// Binding before serving surfaces "address already in use" synchronously,
 	// so we never log "listening" for a server that is not.
@@ -234,7 +240,7 @@ func shutdown(
 
 // HTTP
 
-func newRouter(logger *slog.Logger, engine *chaos.Engine, draining *atomic.Bool) http.Handler {
+func newRouter(logger *slog.Logger, engine *chaos.Engine, apiHandler *api.Handler, draining *atomic.Bool) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
@@ -270,6 +276,8 @@ func newRouter(logger *slog.Logger, engine *chaos.Engine, draining *atomic.Bool)
 
 		writeJSON(r.Context(), logger, w, status, map[string]any{"checks": checks})
 	})
+
+	r.Mount("/api/v1", apiHandler.Routes())
 
 	return r
 }
@@ -314,5 +322,3 @@ func writeJSON(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, 
 		logger.ErrorContext(ctx, "encode response", slog.Any("error", err))
 	}
 }
-
-
