@@ -128,7 +128,7 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 	engine, err := chaos.NewEngine(chaos.Config{
 		TickInterval: cfg.TickInterval,
 		MaxActive:    cfg.MaxActiveSims,
-	}, logger)
+	}, logger, chaos.WithDefaultGenerators())
 	if err != nil {
 		return fmt.Errorf("build chaos engine: %w", err)
 	}

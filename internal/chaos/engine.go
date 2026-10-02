@@ -1,7 +1,4 @@
-// Package chaos simulates infrastructure failures. An Engine owns a set of
-// running Simulations, advances them on a fixed tick, asks a Generator for
-// telemetry at each step, and fans those samples out to subscribers over
-// channels.
+// Package chaos pretends that computers are breaking so people can practice fixing them.
 package chaos
 
 import (
@@ -29,7 +26,7 @@ var (
 
 // DOMAIN TYPES
 
-// FailureMode is the kind of fault being simulated.
+// FailureMode is the kind of thing that breaks.
 type FailureMode string
 
 const (
@@ -40,7 +37,7 @@ const (
 	FailureDBPoolExhaustion FailureMode = "db_pool_exhaustion"
 )
 
-// Valid reports whether m is a mode the engine knows how to simulate.
+// Valid tells us if the engine knows how to pretend this kind of break.
 func (m FailureMode) Valid() bool {
 	switch m {
 	case FailureLatencySpike, FailureErrorRateSurge, FailureMemoryLeak,
@@ -50,7 +47,7 @@ func (m FailureMode) Valid() bool {
 	return false
 }
 
-// Severity mirrors how an incident would be triaged once declared.
+// Severity is how bad the problem is.
 type Severity string
 
 const (
@@ -67,10 +64,7 @@ func (s Severity) Valid() bool {
 	return false
 }
 
-// State is a simulation's position in its lifecycle:
-//
-//	running ──(duration elapses)──▶ resolved
-//	   └──────(Halt called)──────▶ halted
+// State tells us if a simulation is still going, finished by itself, or was stopped early.
 type State string
 
 const (
@@ -79,29 +73,27 @@ const (
 	StateHalted   State = "halted"
 )
 
-// Terminal reports whether no further transitions are possible.
+// Terminal tells us if a simulation is all done and can never change again.
 func (s State) Terminal() bool { return s == StateResolved || s == StateHalted }
 
-// SimulationID uniquely identifies one simulation run.
+// SimulationID is the special name of one simulation.
 type SimulationID string
 
-// Scenario is the request to inject a failure: what breaks, how badly, and
-// for how long. It is the dashboard's input and contains no runtime state.
+// Scenario is the wish list that says what breaks, how badly, and for how long.
 type Scenario struct {
 	Service   string        `json:"service"`
 	Mode      FailureMode   `json:"mode"`
 	Severity  Severity      `json:"severity"`
-	Intensity float64       `json:"intensity"` // 0.0 (barely noticeable) to 1.0 (total outage)
+	Intensity float64       `json:"intensity"` // 0 is a tiny problem and 1 is everything broken
 	Duration  time.Duration `json:"duration"`
 }
 
 const (
 	minDuration = 10 * time.Second
-	maxDuration = 30 * time.Minute // keeps free-tier compute bounded
+	maxDuration = 30 * time.Minute // a limit so our free computer does not get tired
 )
 
-// Validate checks every field and reports all problems at once, each
-// wrapping ErrInvalidScenario so callers can map it to a 400 with errors.Is.
+// Validate checks the whole wish list and tells us everything that is wrong with it.
 func (s Scenario) Validate() error {
 	var errs []error
 	if s.Service == "" {
@@ -122,39 +114,32 @@ func (s Scenario) Validate() error {
 	return errors.Join(errs...)
 }
 
-// Simulation is a Scenario in flight. The engine hands out copies, never
-// pointers, so callers can never mutate state behind the engine's lock.
+// Simulation is a Scenario that has been started.
 type Simulation struct {
 	ID        SimulationID `json:"id"`
 	Scenario  Scenario     `json:"scenario"`
 	State     State        `json:"state"`
 	StartedAt time.Time    `json:"started_at"`
 	EndsAt    time.Time    `json:"ends_at"`
-	EndedAt   *time.Time   `json:"ended_at,omitempty"` // nil while running
+	EndedAt   *time.Time   `json:"ended_at,omitempty"` // empty until the simulation ends
 }
 
 // EXTENSION POINTS
 
-// Generator produces telemetry for one failure mode. Implementations live in
-// metrics.go (Phase 2). Sample must be safe for concurrent use and should be
-// a cheap, pure computation: it runs on the engine's tick path, so anything
-// that blocks here stalls every simulation.
+// Generator makes the pretend numbers for one kind of break, and it must be quick.
 type Generator interface {
 	Sample(sim Simulation, elapsed time.Duration) MetricSample
 }
 
-// Note what is NOT here: a big "Simulator" interface describing the Engine.
-// In Go, interfaces belong to the consumer. The HTTP and Slack packages will
-// each declare the one or two methods they need, and *Engine will satisfy
-// them implicitly. The engine only declares interfaces for things it consumes.
+// Other packages write their own small interfaces for the engine, so there is no big one here.
 
 // ENGINE
 
-// Config tunes the engine. Zero values are replaced with sane defaults.
+// Config holds the engine's settings, and empty ones get good default values.
 type Config struct {
-	TickInterval     time.Duration // how often simulations advance
-	MaxActive        int           // cap on concurrent running simulations
-	SubscriberBuffer int           // per-subscriber channel capacity
+	TickInterval     time.Duration // how often simulations take a step
+	MaxActive        int           // how many simulations can run at the same time
+	SubscriberBuffer int           // how many samples can wait in line for each listener
 }
 
 func (c Config) withDefaults() Config {
@@ -170,8 +155,7 @@ func (c Config) withDefaults() Config {
 	return c
 }
 
-// Engine runs simulations and broadcasts their telemetry. Construct one with
-// NewEngine, start it with Run, and stop it by cancelling Run's context.
+// Engine runs the simulations and shares their numbers with everyone who is listening.
 type Engine struct {
 	cfg        Config
 	log        *slog.Logger
@@ -184,23 +168,23 @@ type Engine struct {
 	nextSub uint64
 
 	running atomic.Bool
-	dropped atomic.Uint64 // samples discarded because a subscriber was slow
+	dropped atomic.Uint64 // samples thrown away because a listener was too slow
 }
 
-// Option customises an Engine at construction time.
+// Option is a little helper that changes one setting when the engine is built.
 type Option func(*Engine)
 
-// WithGenerator registers the telemetry source for a failure mode.
+// WithGenerator tells the engine who makes the numbers for one kind of break.
 func WithGenerator(mode FailureMode, g Generator) Option {
 	return func(e *Engine) { e.generators[mode] = g }
 }
 
-// WithClock overrides time.Now, which makes lifecycle tests deterministic.
+// WithClock lets tests give the engine a pretend clock.
 func WithClock(now func() time.Time) Option {
 	return func(e *Engine) { e.now = now }
 }
 
-// NewEngine builds an idle engine. Nothing runs until Run is called.
+// NewEngine builds an engine that waits quietly until Run is called.
 func NewEngine(cfg Config, logger *slog.Logger, opts ...Option) (*Engine, error) {
 	if logger == nil {
 		return nil, errors.New("chaos: logger is required")
@@ -219,11 +203,10 @@ func NewEngine(cfg Config, logger *slog.Logger, opts ...Option) (*Engine, error)
 	return e, nil
 }
 
-// Ready reports whether the tick loop is live. Backs the /readyz probe.
+// Ready tells us if the engine is awake and ticking.
 func (e *Engine) Ready() bool { return e.running.Load() }
 
-// Run drives the tick loop until ctx is cancelled. A clean, requested stop
-// returns nil; anything else is a real failure.
+// Run keeps the engine ticking until someone tells it to stop.
 func (e *Engine) Run(ctx context.Context) error {
 	if !e.running.CompareAndSwap(false, true) {
 		return ErrAlreadyRunning
@@ -249,11 +232,11 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 }
 
-// tick advances every running simulation by one step.
+// tick moves every running simulation forward by one step.
 func (e *Engine) tick(ctx context.Context) {
 	now := e.now()
 
-	// Phase 1: transition state and collect work under the write lock.
+	// First we lock the door, update each simulation, and remember which ones are still running.
 	e.mu.Lock()
 	active := make([]Simulation, 0, len(e.sims))
 	for _, sim := range e.sims {
@@ -269,8 +252,7 @@ func (e *Engine) tick(ctx context.Context) {
 	}
 	e.mu.Unlock()
 
-	// Phase 2: generate samples with no lock held, so a slow Generator never
-	// blocks Inject, Halt, or Subscribe.
+	// Then we make the numbers with the door unlocked so nobody has to wait.
 	for _, sim := range active {
 		gen, ok := e.generators[sim.Scenario.Mode]
 		if !ok {
@@ -281,9 +263,7 @@ func (e *Engine) tick(ctx context.Context) {
 	}
 }
 
-// broadcast fans a sample out without ever blocking. A subscriber that
-// cannot keep up loses samples rather than stalling the whole engine: for
-// live telemetry, fresh data beats complete data.
+// broadcast sends a sample to every listener and skips anyone who is too slow.
 func (e *Engine) broadcast(sample MetricSample) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -298,7 +278,7 @@ func (e *Engine) broadcast(sample MetricSample) {
 
 // CONTROL API
 
-// Inject validates a scenario and starts simulating it immediately.
+// Inject checks a scenario and starts it right away.
 func (e *Engine) Inject(ctx context.Context, sc Scenario) (Simulation, error) {
 	if err := ctx.Err(); err != nil {
 		return Simulation{}, fmt.Errorf("inject: %w", err)
@@ -344,7 +324,7 @@ func (e *Engine) Inject(ctx context.Context, sc Scenario) (Simulation, error) {
 	return *sim, nil
 }
 
-// Halt stops a running simulation early, as a responder "fixing" it would.
+// Halt stops a running simulation early, like someone fixing the problem.
 func (e *Engine) Halt(ctx context.Context, id SimulationID) (Simulation, error) {
 	if err := ctx.Err(); err != nil {
 		return Simulation{}, fmt.Errorf("halt %s: %w", id, err)
@@ -367,7 +347,7 @@ func (e *Engine) Halt(ctx context.Context, id SimulationID) (Simulation, error) 
 	return *sim, nil
 }
 
-// Get returns a snapshot of one simulation.
+// Get gives back a copy of one simulation.
 func (e *Engine) Get(ctx context.Context, id SimulationID) (Simulation, error) {
 	if err := ctx.Err(); err != nil {
 		return Simulation{}, fmt.Errorf("get %s: %w", id, err)
@@ -383,7 +363,7 @@ func (e *Engine) Get(ctx context.Context, id SimulationID) (Simulation, error) {
 	return *sim, nil
 }
 
-// List returns snapshots of all simulations, newest first.
+// List gives back copies of all simulations, newest first.
 func (e *Engine) List(ctx context.Context) ([]Simulation, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("list: %w", err)
@@ -400,10 +380,7 @@ func (e *Engine) List(ctx context.Context) ([]Simulation, error) {
 	return out, nil
 }
 
-// Subscribe returns a channel of live telemetry. The subscription lives
-// exactly as long as ctx: when ctx is cancelled (for example, a WebSocket
-// client disconnects) the channel is unregistered and closed, so the reader's
-// `for sample := range ch` loop ends naturally with no leaked goroutines.
+// Subscribe gives back a channel of live numbers that closes when ctx is done.
 func (e *Engine) Subscribe(ctx context.Context) (<-chan MetricSample, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("subscribe: %w", err)
@@ -419,8 +396,7 @@ func (e *Engine) Subscribe(ctx context.Context) (<-chan MetricSample, error) {
 
 	go func() {
 		<-ctx.Done()
-		// Taking the write lock guarantees broadcast is not mid-send on ch,
-		// so closing here can never panic with "send on closed channel".
+		// We lock the door before closing the channel so nobody is sending on it at the same time.
 		e.mu.Lock()
 		delete(e.subs, id)
 		e.mu.Unlock()
