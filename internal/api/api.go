@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -34,17 +35,19 @@ type simulator interface {
 
 // Handler answers the HTTP requests about simulations.
 type Handler struct {
-	sim      simulator
-	log      *slog.Logger
-	shutdown context.Context // done when the server starts to turn off
+	sim       simulator
+	log       *slog.Logger
+	shutdown  context.Context // done when the server starts to turn off
+	heartbeat time.Duration   // how often a quiet stream says hello
 }
 
 // NewHandler builds a Handler from the things it needs to do its job.
 func NewHandler(sim simulator, logger *slog.Logger, shutdownCtx context.Context) *Handler {
 	return &Handler{
-		sim:      sim,
-		log:      logger.With(slog.String("component", "api")),
-		shutdown: shutdownCtx,
+		sim:       sim,
+		log:       logger.With(slog.String("component", "api")),
+		shutdown:  shutdownCtx,
+		heartbeat: heartbeatInterval,
 	}
 }
 
@@ -63,6 +66,7 @@ func (h *Handler) Routes() chi.Router {
 	r.Get("/simulations", h.listSimulations)
 	r.Get("/simulations/{id}", h.getSimulation)
 	r.Post("/simulations/{id}/halt", h.haltSimulation)
+	r.Get("/stream", h.streamMetrics)
 
 	return r
 }
