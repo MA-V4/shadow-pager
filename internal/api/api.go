@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/MA-V4/shadow-pager/internal/chaos"
+	"github.com/MA-V4/shadow-pager/internal/incident"
 )
 
 // ERRORS
@@ -39,16 +40,21 @@ type Handler struct {
 	log       *slog.Logger
 	shutdown  context.Context // done when the server starts to turn off
 	heartbeat time.Duration   // how often a quiet stream says hello
+	incidents incidentSource
 }
 
 // NewHandler builds a Handler from the things it needs to do its job.
-func NewHandler(sim simulator, logger *slog.Logger, shutdownCtx context.Context) *Handler {
-	return &Handler{
+func NewHandler(sim simulator, logger *slog.Logger, shutdownCtx context.Context, opts ...Option) *Handler {
+	h := &Handler{
 		sim:       sim,
 		log:       logger.With(slog.String("component", "api")),
 		shutdown:  shutdownCtx,
 		heartbeat: heartbeatInterval,
 	}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 // Routes gives back a router that knows which function answers which URL.
@@ -67,6 +73,12 @@ func (h *Handler) Routes() chi.Router {
 	r.Get("/simulations/{id}", h.getSimulation)
 	r.Post("/simulations/{id}/halt", h.haltSimulation)
 	r.Get("/stream", h.streamMetrics)
+
+	// The incident routes only exist when someone gave us a place to read incidents from.
+	if h.incidents != nil {
+		r.Get("/incidents", h.listIncidents)
+		r.Get("/incidents/{id}", h.getIncident)
+	}
 
 	return r
 }
@@ -109,7 +121,7 @@ func errorStatus(err error) int {
 	switch {
 	case errors.Is(err, errBadRequest), errors.Is(err, chaos.ErrInvalidScenario):
 		return http.StatusBadRequest
-	case errors.Is(err, chaos.ErrNotFound):
+	case errors.Is(err, chaos.ErrNotFound), errors.Is(err, incident.ErrNotFound):
 		return http.StatusNotFound
 	case errors.Is(err, chaos.ErrNotActive):
 		return http.StatusConflict
