@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: shadow-pager-api
+    runtime: go
+    plan: free
+    buildCommand: CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/server ./cmd/server
+    startCommand: ./bin/server
+    healthCheckPath: /readyz
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: info
