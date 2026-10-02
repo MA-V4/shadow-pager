@@ -1,0 +1,32 @@
+_metadata:
+  major_version: 1
+display_information:
+  name: Shadow-Pager
+  description: Practice incident response on pretend infrastructure failures.
+  background_color: "#1f2937"
+features:
+  bot_user:
+    display_name: shadow-pager
+    always_online: true
+  slash_commands:
+    - command: /shadowpager
+      description: Inject, list and halt pretend failures
+      usage_hint: "inject <mode> <service> [intensity] [duration] | list | halt <simulation_id> | help"
+      should_escape: false
+oauth_config:
+  scopes:
+    bot:
+      # Create the public incident channel and invite responders into it.
+      - channels:manage
+      # Join the announce channel before posting there.
+      - channels:join
+      # Post and update the incident card, timeline messages and replies.
+      - chat:write
+      # Receive the /shadowpager slash command.
+      - commands
+settings:
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false
