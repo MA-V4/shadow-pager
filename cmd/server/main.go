@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -24,6 +25,8 @@ import (
 
 	"github.com/MA-V4/shadow-pager/internal/api"
 	"github.com/MA-V4/shadow-pager/internal/chaos"
+	"github.com/MA-V4/shadow-pager/internal/incident"
+	"github.com/MA-V4/shadow-pager/internal/slack"
 )
 
 // version is stamped at build time:
@@ -50,6 +53,11 @@ type config struct {
 	ShutdownTimeout time.Duration
 	TickInterval    time.Duration
 	MaxActiveSims   int
+
+	SlackAppToken          string
+	SlackBotToken          string
+	SlackInviteUserIDs     []string
+	SlackAnnounceChannelID string
 }
 
 // loadConfig is a pure function of its input, so it takes no context.
@@ -98,7 +106,46 @@ func loadConfig(getenv func(string) string) (config, error) {
 		cfg.MaxActiveSims = v
 	}
 
+	if err := loadSlackConfig(getenv, &cfg); err != nil {
+		return config{}, err
+	}
+
 	return cfg, nil
+}
+
+// errSlackConfig means the Slack settings do not make sense together.
+var errSlackConfig = errors.New("invalid slack config")
+
+// loadSlackConfig reads the Slack settings and checks that the two tokens come as a pair.
+func loadSlackConfig(getenv func(string) string, cfg *config) error {
+	app := strings.TrimSpace(getenv("SLACK_APP_TOKEN"))
+	bot := strings.TrimSpace(getenv("SLACK_BOT_TOKEN"))
+
+	// The messages never repeat a token, because tokens are secrets.
+	switch {
+	case app == "" && bot == "":
+		return nil
+	case app == "" || bot == "":
+		return fmt.Errorf("%w: SLACK_APP_TOKEN and SLACK_BOT_TOKEN must be set together", errSlackConfig)
+	case !strings.HasPrefix(app, "xapp-"):
+		return fmt.Errorf("%w: SLACK_APP_TOKEN must start with xapp-", errSlackConfig)
+	case !strings.HasPrefix(bot, "xoxb-"):
+		return fmt.Errorf("%w: SLACK_BOT_TOKEN must start with xoxb-", errSlackConfig)
+	}
+
+	cfg.SlackAppToken, cfg.SlackBotToken = app, bot
+	cfg.SlackAnnounceChannelID = strings.TrimSpace(getenv("SLACK_ANNOUNCE_CHANNEL_ID"))
+	for _, id := range strings.Split(getenv("SLACK_INVITE_USER_IDS"), ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			cfg.SlackInviteUserIDs = append(cfg.SlackInviteUserIDs, id)
+		}
+	}
+	return nil
+}
+
+// slackEnabled tells us if both Slack tokens were given.
+func (c config) slackEnabled() bool {
+	return c.SlackAppToken != "" && c.SlackBotToken != ""
 }
 
 func envOr(getenv func(string) string, key, fallback string) string {
@@ -136,6 +183,30 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 		return fmt.Errorf("build chaos engine: %w", err)
 	}
 
+	// Without Slack tokens the app still runs, and incidents are simply not announced anywhere.
+	var notifier incident.Notifier = incident.NopNotifier{}
+	var slackClient *slack.Client
+	if cfg.slackEnabled() {
+		slackClient = slack.NewClient(slack.Config{
+			AppToken:          cfg.SlackAppToken,
+			BotToken:          cfg.SlackBotToken,
+			InviteUserIDs:     cfg.SlackInviteUserIDs,
+			AnnounceChannelID: cfg.SlackAnnounceChannelID,
+		}, logger)
+		notifier = slackClient
+	} else {
+		logger.WarnContext(ctx, "slack is disabled because SLACK_APP_TOKEN and SLACK_BOT_TOKEN are not set")
+	}
+
+	incidents, err := incident.NewManager(engine, notifier, logger)
+	if err != nil {
+		return fmt.Errorf("build incident manager: %w", err)
+	}
+	var listener *slack.Listener
+	if slackClient != nil {
+		listener = slack.NewListener(slackClient, incidents, engine, logger)
+	}
+
 	// draining flips to true the moment shutdown begins, so /readyz starts
 	// failing and the platform stops routing new traffic to this instance.
 	var draining atomic.Bool
@@ -145,7 +216,7 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 	defer cancelStreams()
 
 	srv := &http.Server{
-		Handler:           newRouter(logger, engine, api.NewHandler(engine, logger, streamCtx), &draining),
+		Handler:           newRouter(logger, engine, api.NewHandler(engine, logger, streamCtx, api.WithIncidents(incidents)), &draining),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		// Streaming handlers (Phase 3) extend their own deadline through
@@ -174,6 +245,13 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 	engineDone := make(chan error, 1)
 	go func() { engineDone <- engine.Run(engineCtx) }()
 
+	// The incident manager and Slack get their own context so they can stop after the engine.
+	incidentCtx, cancelIncidents := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancelIncidents()
+
+	incidentsDone := make(chan error, 1)
+	go func() { incidentsDone <- runIncidents(incidentCtx, cancelIncidents, logger, incidents, listener) }()
+
 	serverErr := make(chan error, 1)
 	go func() {
 		logger.InfoContext(ctx, "http server listening", slog.String("addr", ln.Addr().String()))
@@ -186,6 +264,7 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 	// Block until a signal arrives or a component dies on its own.
 	var runErr error
 	engineStopped := false
+	incidentsStopped := false
 	select {
 	case <-ctx.Done():
 		logger.InfoContext(ctx, "shutdown signal received")
@@ -194,9 +273,40 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 	case err := <-engineDone:
 		engineStopped = true
 		runErr = fmt.Errorf("chaos engine stopped unexpectedly: %w", err)
+	case err := <-incidentsDone:
+		incidentsStopped = true
+		runErr = fmt.Errorf("incident manager stopped unexpectedly: %w", err)
 	}
 
-	return errors.Join(runErr, shutdown(ctx, logger, cfg, srv, &draining, cancelEngine, engineDone, engineStopped))
+	return errors.Join(runErr, shutdown(ctx, logger, cfg, srv, &draining, cancelEngine, engineDone, engineStopped,
+		cancelIncidents, incidentsDone, incidentsStopped))
+}
+
+// runIncidents runs the incident manager and the Slack listener side by side until both have stopped.
+func runIncidents(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	logger *slog.Logger,
+	incidents *incident.Manager,
+	listener *slack.Listener,
+) error {
+	slackDone := make(chan struct{})
+	go func() {
+		defer close(slackDone)
+		if listener == nil {
+			return
+		}
+		// A broken Slack connection must not take the whole app down, so we only write it down.
+		if err := listener.Run(ctx); err != nil {
+			logger.ErrorContext(ctx, "slack listener stopped, so buttons and slash commands are off", slog.Any("error", err))
+		}
+	}()
+
+	err := incidents.Run(ctx)
+	// When the manager is gone there is nothing left for Slack to drive, so Slack stops too.
+	cancel()
+	<-slackDone
+	return err
 }
 
 // shutdown drains HTTP traffic and stops the engine within cfg.ShutdownTimeout.
@@ -211,6 +321,9 @@ func shutdown(
 	cancelEngine context.CancelFunc,
 	engineDone <-chan error,
 	engineStopped bool,
+	cancelIncidents context.CancelFunc,
+	incidentsDone <-chan error,
+	incidentsStopped bool,
 ) error {
 	draining.Store(true)
 
@@ -234,6 +347,19 @@ func shutdown(
 			}
 		case <-shutdownCtx.Done():
 			errs = append(errs, fmt.Errorf("chaos engine shutdown: %w", shutdownCtx.Err()))
+		}
+	}
+
+	// The incident manager and Slack go last, after the engine has sent its final events.
+	cancelIncidents()
+	if !incidentsStopped {
+		select {
+		case err := <-incidentsDone:
+			if err != nil {
+				errs = append(errs, fmt.Errorf("incident manager shutdown: %w", err))
+			}
+		case <-shutdownCtx.Done():
+			errs = append(errs, fmt.Errorf("incident manager shutdown: %w", shutdownCtx.Err()))
 		}
 	}
 
