@@ -171,6 +171,49 @@ func TestStreamSendsSamplesAsEvents(t *testing.T) {
 	}
 }
 
+func TestStreamRoundsMetricValues(t *testing.T) {
+	sample := testSample("sim_a", 123.456789)
+	sample.ErrorRate = 0.0123456
+	sample.CPUPercent = 45.678
+	sample.MemoryMB = 600.1234
+
+	fake := &fakeSimulator{stream: make(chan chaos.MetricSample, 1)}
+	fake.stream <- sample
+
+	s := openStream(t, newStreamHandler(fake, context.Background()), "")
+
+	want := []string{
+		"event: metric",
+		`data: {"simulation_id":"sim_a","service":"payments-api","mode":"latency_spike","timestamp":"2026-01-02T15:04:05Z","latency_p99_ms":123.46,"error_rate":0.0123,"cpu_percent":45.68,"memory_mb":600.12,"healthy":true,"breaches":[]}`,
+	}
+	if got := s.nextFrame(t); !slices.Equal(got, want) {
+		t.Errorf("frame = %q, want %q", got, want)
+	}
+}
+
+func TestRoundTo(t *testing.T) {
+	tests := []struct {
+		name   string
+		value  float64
+		places int
+		want   float64
+	}{
+		{name: "rounds down", value: 123.454, places: 2, want: 123.45},
+		{name: "rounds up", value: 123.456, places: 2, want: 123.46},
+		{name: "four places", value: 0.00187, places: 4, want: 0.0019},
+		{name: "already short", value: 512, places: 2, want: 512},
+		{name: "zero stays zero", value: 0, places: 4, want: 0},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := roundTo(tc.value, tc.places); got != tc.want {
+				t.Errorf("roundTo(%v, %d) = %v, want %v", tc.value, tc.places, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestStreamFiltersBySimulationID(t *testing.T) {
 	fake := &fakeSimulator{stream: make(chan chaos.MetricSample, 3)}
 	fake.stream <- testSample("sim_a", 111)

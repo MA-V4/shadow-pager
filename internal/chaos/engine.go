@@ -317,7 +317,7 @@ func (e *Engine) Inject(ctx context.Context, sc Scenario) (Simulation, error) {
 
 	e.log.InfoContext(ctx, "simulation injected",
 		slog.String("simulation_id", string(id)),
-		slog.String("service", sc.Service),
+		slog.String("target_service", sc.Service),
 		slog.String("mode", string(sc.Mode)),
 		slog.String("severity", string(sc.Severity)),
 	)

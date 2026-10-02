@@ -1,4 +1,4 @@
-package chaos 
+package chaos
 
 import (
 	"math"
@@ -24,14 +24,14 @@ type Baseline struct {
 	LatencyP99Ms float64
 	ErrorRate    float64
 	CPUPercent   float64
-	MemoryMB 	 float64
+	MemoryMB     float64
 }
 
 var DefaultBaseline = Baseline{
-	LatencyP99Ms: 120, 
-	ErrorRate: 0.002,
-	CPUPercent: 30,
-	MemoryMB: 512,
+	LatencyP99Ms: 120,
+	ErrorRate:    0.002,
+	CPUPercent:   30,
+	MemoryMB:     512,
 }
 
 type SLO struct {
@@ -42,12 +42,11 @@ type SLO struct {
 }
 
 var DefaultSLO = SLO{
-	MaxLatencyP99Ms: 500, 
-	MaxErrorRate: 0.01, 
-	MaxCPUPercent: 90, 
-	MaxMemoryMB: 2048,
+	MaxLatencyP99Ms: 500,
+	MaxErrorRate:    0.01,
+	MaxCPUPercent:   90,
+	MaxMemoryMB:     2048,
 }
-
 
 // Breaches lists the signals in m that violate the SLO. Nil means healthy.
 func (s SLO) Breaches(m MetricSample) []string {
@@ -93,7 +92,6 @@ func ShapeCliff(p float64) float64 {
 	return smoothstep(0.3, 0.4, p) * (1 - smoothstep(0.9, 1, p))
 }
 
-
 func smoothstep(edge0, edge1, x float64) float64 {
 	t := clamp((x-edge0)/(edge1-edge0), 0, 1)
 	return t * t * (3 - 2*t)
@@ -105,11 +103,12 @@ func clamp(v, lo, hi float64) float64 { return math.Max(lo, math.Min(hi, v)) }
 
 // Impact is how far each signal moves at full intensity and full shape.
 type Impact struct {
-	LatencyMul float64 
-	ErrorAdd   float64 
-	CPUAdd     float64 
-	MemoryAdd  float64 
+	LatencyMul float64
+	ErrorAdd   float64
+	CPUAdd     float64
+	MemoryAdd  float64
 }
+
 // ProfileGenerator turns a Baseline, an Impact and a Shape into telemetry.
 
 type ProfileGenerator struct {

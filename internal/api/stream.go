@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"time"
 
@@ -41,13 +42,19 @@ func newMetricResponse(m chaos.MetricSample) metricResponse {
 		Service:      m.Service,
 		Mode:         string(m.Mode),
 		Timestamp:    m.Timestamp,
-		LatencyP99Ms: m.LatencyP99Ms,
-		ErrorRate:    m.ErrorRate,
-		CPUPercent:   m.CPUPercent,
-		MemoryMB:     m.MemoryMB,
+		LatencyP99Ms: roundTo(m.LatencyP99Ms, 2),
+		ErrorRate:    roundTo(m.ErrorRate, 4),
+		CPUPercent:   roundTo(m.CPUPercent, 2),
+		MemoryMB:     roundTo(m.MemoryMB, 2),
 		Healthy:      m.Healthy,
 		Breaches:     breaches,
 	}
+}
+
+// roundTo trims a number so it keeps only a few digits after the dot.
+func roundTo(v float64, places int) float64 {
+	scale := math.Pow10(places)
+	return math.Round(v*scale) / scale
 }
 
 // HANDLER

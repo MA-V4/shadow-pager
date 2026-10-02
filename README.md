@@ -1,5 +1,7 @@
 # Shadow-Pager
 
+[![CI](https://github.com/MA-V4/shadow-pager/actions/workflows/ci.yml/badge.svg)](https://github.com/MA-V4/shadow-pager/actions/workflows/ci.yml)
+
 A ChatOps incident simulation engine. Inject infrastructure failures from a
 dashboard, watch an automated incident lifecycle unfold in Slack, and stream
 live telemetry to a status page.
