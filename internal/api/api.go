@@ -59,6 +59,11 @@ func (h *Handler) Routes() chi.Router {
 		h.writeJSON(w, r, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
 	})
 
+	r.Post("/simulations", h.createSimulation)
+	r.Get("/simulations", h.listSimulations)
+	r.Get("/simulations/{id}", h.getSimulation)
+	r.Post("/simulations/{id}/halt", h.haltSimulation)
+
 	return r
 }
 
