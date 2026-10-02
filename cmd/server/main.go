@@ -314,3 +314,5 @@ func writeJSON(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, 
 		logger.ErrorContext(ctx, "encode response", slog.Any("error", err))
 	}
 }
+
+
