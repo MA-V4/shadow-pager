@@ -82,6 +82,7 @@ type Incident struct {
 	ResolvedAt     *time.Time
 	Timeline       []TimelineEntry
 	ChannelID      string // the Slack channel for this incident, empty when there is none
+	CardTimestamp  string // the Slack message that shows the incident card, empty when there is none
 }
 
 // New starts an incident for a simulation that broke its limits.
