@@ -68,13 +68,15 @@ describe('StatusPage', () => {
     expect(within(services).getByText('Operational')).toBeTruthy()
     expect(within(services).getByText('Major outage')).toBeTruthy()
     expect(within(services).getByText(/No recent measurements/)).toBeTruthy()
+    // A breach is said in words next to the number, not only shown in red.
+    expect(within(services).getAllByText('Over limit')).toHaveLength(2)
 
     const metrics = screen.getByLabelText('Current metrics of payments-api')
     const value = (label: string) => within(metrics).getByText(label).nextElementSibling
-    expect(value('Latency p99')?.textContent).toBe('950.12 ms')
+    expect(value('Latency p99')?.textContent).toBe('950.12 ms')
     expect(value('Error rate')?.textContent).toBe('1.23%')
     expect(value('CPU')?.textContent).toBe('40%')
-    expect(value('Memory')?.textContent).toBe('512 MB')
+    expect(value('Memory')?.textContent).toBe('512 MB')
     // Only the numbers that broke their limit are marked.
     expect(value('Latency p99')?.className).toContain('text-bad')
     expect(value('CPU')?.className).not.toContain('text-bad')
@@ -86,8 +88,8 @@ describe('StatusPage', () => {
     render(<StatusPage />)
 
     expect(await screen.findByText('All systems operational')).toBeTruthy()
-    expect(screen.getByText('No active incidents')).toBeTruthy()
-    expect(screen.getByText('No services to show yet')).toBeTruthy()
+    expect(screen.getByText(/^No active incidents\./)).toBeTruthy()
+    expect(screen.getByText(/^No services to show yet\./)).toBeTruthy()
   })
 
   it('says degraded when a service breaches without a serious incident', async () => {
@@ -114,7 +116,7 @@ describe('StatusPage', () => {
 
     render(<StatusPage />)
 
-    expect(await screen.findByText('The status could not be loaded')).toBeTruthy()
+    expect(await screen.findByText('Could not load the status')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
   })
 })
