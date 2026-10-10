@@ -3,54 +3,73 @@
 /* Dark mode is switched by a class on the html element, not by the system setting alone. */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/*
+ * DESIGN TOKENS
+ * Every colour, radius and shadow in the app comes from this file, so a new design system only has to change it here.
+ * The neutrals are one cool grey family, and colour is kept for meaning: green is healthy, amber is a warning, red is a breach.
+ */
+
 /* LIGHT THEME */
 :root {
   --background: #f6f7f9;
-  --foreground: #10131a;
+  --foreground: #0f1319;
   --card: #ffffff;
-  --card-foreground: #10131a;
-  --muted: #eceef2;
-  --muted-foreground: #5b6474;
+  --card-foreground: #0f1319;
+  --muted: #eceff3;
+  --muted-foreground: #545e6e;
   --border: #dde1e8;
-  --input: #cfd5df;
-  --ring: #f2555a;
-  --primary: #e23d43;
+  --input: #c3cad6;
+  --ring: #2456c9;
+  --primary: #0f1319;
   --primary-foreground: #ffffff;
-  --secondary: #e7eaf0;
-  --secondary-foreground: #10131a;
-  --destructive: #c62828;
+  --secondary: #e6e9ef;
+  --secondary-foreground: #0f1319;
+  --destructive: #c4272e;
   --destructive-foreground: #ffffff;
-  --ok: #15803d;
-  --warn: #b45309;
-  --bad: #c62828;
-  --info: #1d4ed8;
-  --chart-line: #1d4ed8;
-  --chart-grid: #dde1e8;
+  --brand: #e5484d;
+  --ok: #177a3e;
+  --warn: #9a5700;
+  --bad: #c4272e;
+  --info: #2456c9;
+  --chart-line: #3b4556;
+  --chart-grid: #e3e6ec;
+  --shadow-card: 0 1px 2px rgb(15 19 25 / 0.05), 0 1px 1px rgb(15 19 25 / 0.03);
+  --shadow-pop: 0 12px 32px rgb(15 19 25 / 0.14), 0 2px 6px rgb(15 19 25 / 0.08);
 }
 
 /* DARK THEME */
 .dark {
-  --background: #0b0e14;
-  --foreground: #e6e9ef;
-  --card: #121722;
-  --card-foreground: #e6e9ef;
-  --muted: #1a2130;
-  --muted-foreground: #97a1b3;
-  --border: #242c3d;
-  --input: #2e384c;
-  --ring: #f2555a;
-  --primary: #f2555a;
-  --primary-foreground: #14060a;
-  --secondary: #1e2636;
-  --secondary-foreground: #e6e9ef;
-  --destructive: #ef5350;
+  --background: #0a0d12;
+  --foreground: #e7eaf0;
+  --card: #10141b;
+  --card-foreground: #e7eaf0;
+  --muted: #171c26;
+  --muted-foreground: #98a2b3;
+  --border: #212835;
+  --input: #303a4c;
+  --ring: #7aa2ff;
+  --primary: #e7eaf0;
+  --primary-foreground: #0a0d12;
+  --secondary: #1b2230;
+  --secondary-foreground: #e7eaf0;
+  --destructive: #ff6369;
   --destructive-foreground: #14060a;
-  --ok: #4ade80;
-  --warn: #fbbf24;
-  --bad: #f87171;
-  --info: #7aa7ff;
-  --chart-line: #7aa7ff;
-  --chart-grid: #242c3d;
+  --brand: #ff6369;
+  --ok: #3ecf8e;
+  --warn: #f5b83d;
+  --bad: #ff6369;
+  --info: #7aa2ff;
+  --chart-line: #b4bccb;
+  --chart-grid: #1c2330;
+  --shadow-card: 0 0 0 0 transparent;
+  --shadow-pop: 0 16px 40px rgb(0 0 0 / 0.5), 0 2px 8px rgb(0 0 0 / 0.4);
+}
+
+/* One radius scale for the whole app: 6px for controls, 10px for panels, 14px for the big status banner. */
+@theme {
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
 }
 
 /* These names turn the variables above into Tailwind colours such as bg-card and text-muted-foreground. */
@@ -70,12 +89,27 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-brand: var(--brand);
   --color-ok: var(--ok);
   --color-warn: var(--warn);
   --color-bad: var(--bad);
   --color-info: var(--info);
+  --shadow-card: var(--shadow-card);
+  --shadow-pop: var(--shadow-pop);
+  /* The font is one token, so the typeface of a design system can be dropped in with a single change. */
   --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+  --animate-indeterminate: indeterminate 1.6s ease-in-out infinite;
+}
+
+/* The waking bar slides a short block from left to right to show that something is still happening. */
+@keyframes indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(350%);
+  }
 }
 
 @layer base {
@@ -85,6 +119,16 @@
 
   html {
     color-scheme: light;
+    -webkit-tap-highlight-color: transparent;
+    /* Moving the focus to something near the top must not hide it under the sticky top bar. */
+    scroll-padding-top: 5rem;
+  }
+
+  /* With a mouse or trackpad the page does not bounce past its ends, and touch screens keep pull to refresh. */
+  @media (pointer: fine) {
+    html {
+      overscroll-behavior: none;
+    }
   }
 
   html.dark {
@@ -95,7 +139,40 @@
     background-color: var(--background);
     color: var(--foreground);
     font-family: var(--font-sans);
+    font-feature-settings: 'cv11', 'ss01';
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    /* On phones with a notch the content stays clear of it when the phone is held sideways. */
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+
+  /* Headings never leave one lonely word on the last line. */
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+
+  /* Jumping to a heading must not hide it under the top bar. */
+  [id] {
+    scroll-margin-top: 5rem;
+  }
+
+  /* Taps answer at once, without the delay that waits for a double tap. */
+  a,
+  button,
+  input,
+  select,
+  summary,
+  [role='button'] {
+    touch-action: manipulation;
+  }
+
+  /* The built in select gets its own colours, so it stays readable in dark mode on Windows. */
+  select {
+    background-color: var(--background);
+    color: var(--foreground);
   }
 
   /* Keyboard users always get a clear outline, on every control. */
@@ -105,9 +182,12 @@
   }
 }
 
+/* People who ask for less motion get none: no pulsing, no sliding, no easing. */
 @media (prefers-reduced-motion: reduce) {
-  * {
-    animation-duration: 0.01ms !important;
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
     transition-duration: 0.01ms !important;
   }
 }

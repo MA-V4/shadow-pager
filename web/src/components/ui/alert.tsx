@@ -3,7 +3,7 @@ import type { HTMLAttributes } from 'react'
 
 import { cn } from '../../lib/utils'
 
-const alertVariants = cva('rounded-lg border px-4 py-3 text-sm', {
+const alertVariants = cva('rounded-md border px-3.5 py-3 text-sm', {
   variants: {
     tone: {
       neutral: 'border-border bg-muted text-foreground',

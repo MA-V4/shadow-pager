@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Shadow-Pager: inject pretend infrastructure failures and practice incident response." />
     <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#0a0d12" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Shadow-Pager" />
+    <meta property="og:description" content="Inject pretend infrastructure failures, watch the telemetry live, and practice incident response." />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Shadow-Pager</title>
     <script>
@@ -12,6 +16,7 @@
       try {
         if (localStorage.getItem('shadow-pager.theme') === 'light') {
           document.documentElement.classList.remove('dark')
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#f6f7f9')
         }
       } catch (_) {
         // Storage can be switched off, and then the dark default simply stays.
