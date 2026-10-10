@@ -81,6 +81,7 @@ type fakeNotifier struct {
 	entries  chan TimelineEntry
 
 	channelID  string
+	cardTS     string
 	declareErr error
 	block      chan struct{} // when set, IncidentDeclared waits here until the test closes it
 }
@@ -91,22 +92,23 @@ func newFakeNotifier() *fakeNotifier {
 		changed:   make(chan Incident, 16),
 		entries:   make(chan TimelineEntry, 16),
 		channelID: "C123",
+		cardTS:    "1700000000.000100",
 	}
 }
 
-func (f *fakeNotifier) IncidentDeclared(ctx context.Context, inc Incident) (string, error) {
+func (f *fakeNotifier) IncidentDeclared(ctx context.Context, inc Incident) (Announcement, error) {
 	f.declared <- inc
 	if f.block != nil {
 		select {
 		case <-f.block:
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return Announcement{}, ctx.Err()
 		}
 	}
 	if f.declareErr != nil {
-		return "", f.declareErr
+		return Announcement{}, f.declareErr
 	}
-	return f.channelID, nil
+	return Announcement{ChannelID: f.channelID, CardTimestamp: f.cardTS}, nil
 }
 
 func (f *fakeNotifier) StatusChanged(_ context.Context, inc Incident) error {
@@ -128,34 +130,59 @@ type harness struct {
 	engine   *fakeEngine
 	notifier *fakeNotifier
 	clock    *fakeClock
+
+	cancel  context.CancelFunc
+	done    chan error
+	stopped bool
 }
 
 // startManager builds a manager on top of fakes and runs it until the test ends.
 func startManager(t *testing.T, notifier *fakeNotifier) *harness {
 	t.Helper()
+	h := newHarness(t, notifier)
+	h.start()
+	return h
+}
+
+// newHarness builds a manager on top of fakes without running it, so a test can restore first.
+func newHarness(t *testing.T, notifier *fakeNotifier, opts ...Option) *harness {
+	t.Helper()
 	eng := newFakeEngine()
 	clock := &fakeClock{now: testStart}
-	m, err := NewManager(eng, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)), WithClock(clock.Now))
+	opts = append([]Option{WithClock(clock.Now)}, opts...)
+	m, err := NewManager(eng, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)), opts...)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- m.Run(ctx) }()
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case err := <-done:
-			if err != nil {
-				t.Errorf("Run returned %v, want nil", err)
-			}
-		case <-time.After(testWait):
-			t.Error("Run did not return after cancel")
-		}
-	})
-
 	return &harness{t: t, manager: m, engine: eng, notifier: notifier, clock: clock}
+}
+
+// start runs the manager in the background and stops it when the test ends.
+func (h *harness) start() {
+	h.t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	h.cancel = cancel
+	h.done = make(chan error, 1)
+	go func() { h.done <- h.manager.Run(ctx) }()
+	h.t.Cleanup(h.stop)
+}
+
+// stop asks the manager to finish and waits until Run has returned.
+func (h *harness) stop() {
+	h.t.Helper()
+	if h.stopped {
+		return
+	}
+	h.stopped = true
+	h.cancel()
+	select {
+	case err := <-h.done:
+		if err != nil {
+			h.t.Errorf("Run returned %v, want nil", err)
+		}
+	case <-time.After(testWait):
+		h.t.Error("Run did not return after cancel")
+	}
 }
 
 // sample hands one sample to the manager and waits until it is taken.
@@ -259,15 +286,15 @@ func TestManagerDeclaresOnFirstBreach(t *testing.T) {
 		t.Fatalf("Acknowledge: %v", err)
 	}
 	changed := recv(t, h.notifier.changed, "status changed")
-	if changed.ChannelID != "C123" {
-		t.Errorf("ChannelID = %q, want the one the notifier gave back", changed.ChannelID)
+	if changed.ChannelID != "C123" || changed.CardTimestamp != "1700000000.000100" {
+		t.Errorf("channel = %q, card = %q, want the ones the notifier gave back", changed.ChannelID, changed.CardTimestamp)
 	}
 	got, err := h.manager.Get(context.Background(), inc.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.ChannelID != "C123" {
-		t.Errorf("stored ChannelID = %q, want C123", got.ChannelID)
+	if got.ChannelID != "C123" || got.CardTimestamp != "1700000000.000100" {
+		t.Errorf("stored channel = %q, card = %q, want C123 and the card timestamp", got.ChannelID, got.CardTimestamp)
 	}
 }
 
@@ -628,9 +655,9 @@ func TestNopNotifier(t *testing.T) {
 	var n Notifier = NopNotifier{}
 	ctx := context.Background()
 
-	channelID, err := n.IncidentDeclared(ctx, Incident{})
-	if channelID != "" || err != nil {
-		t.Errorf("IncidentDeclared = %q, %v, want empty and nil", channelID, err)
+	where, err := n.IncidentDeclared(ctx, Incident{})
+	if where != (Announcement{}) || err != nil {
+		t.Errorf("IncidentDeclared = %+v, %v, want empty and nil", where, err)
 	}
 	if err := n.StatusChanged(ctx, Incident{}); err != nil {
 		t.Errorf("StatusChanged = %v, want nil", err)

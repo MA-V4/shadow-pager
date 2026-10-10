@@ -33,18 +33,26 @@ type engine interface {
 // Notifier is how the manager tells the outside world what happened to an incident.
 type Notifier interface {
 	// IncidentDeclared announces a new incident and gives back the channel made for it, if any.
-	IncidentDeclared(ctx context.Context, inc Incident) (channelID string, err error)
+	IncidentDeclared(ctx context.Context, inc Incident) (Announcement, error)
 	// StatusChanged announces that an incident moved to a new status.
 	StatusChanged(ctx context.Context, inc Incident) error
 	// TimelineEntryAdded announces a new line in the story that did not change the status.
 	TimelineEntryAdded(ctx context.Context, inc Incident, entry TimelineEntry) error
 }
 
+// Announcement says where an incident was announced, so later updates can find the same place.
+type Announcement struct {
+	ChannelID     string
+	CardTimestamp string
+}
+
 // NopNotifier is a Notifier that stays silent, for when Slack is switched off.
 type NopNotifier struct{}
 
-func (NopNotifier) IncidentDeclared(context.Context, Incident) (string, error) { return "", nil }
-func (NopNotifier) StatusChanged(context.Context, Incident) error              { return nil }
+func (NopNotifier) IncidentDeclared(context.Context, Incident) (Announcement, error) {
+	return Announcement{}, nil
+}
+func (NopNotifier) StatusChanged(context.Context, Incident) error { return nil }
 func (NopNotifier) TimelineEntryAdded(context.Context, Incident, TimelineEntry) error {
 	return nil
 }
@@ -90,6 +98,11 @@ type Manager struct {
 	jobs    chan notification
 	running atomic.Bool
 	dropped atomic.Uint64 // messages thrown away because the queue was full
+
+	store         Store
+	persistJobs   chan persistJob
+	persistTime   time.Duration
+	droppedWrites atomic.Uint64 // saves thrown away because the queue was full
 }
 
 // Option is a little helper that changes one setting when the manager is built.
@@ -128,6 +141,9 @@ func NewManager(eng engine, notifier Notifier, logger *slog.Logger, opts ...Opti
 		known:         make(map[IncidentID]map[string]bool),
 		halting:       make(map[chaos.SimulationID]bool),
 		jobs:          make(chan notification, notifyQueueSize),
+		store:         nopStore{},
+		persistJobs:   make(chan persistJob, persistQueueSize),
+		persistTime:   defaultPersistTimeout,
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -158,11 +174,22 @@ func (m *Manager) Run(ctx context.Context) error {
 		m.notifyLoop(ctx)
 	}()
 
+	// Saving also gets its own goroutine, so a slow database never slows down the samples either.
+	stopPersist := make(chan struct{})
+	persistDone := make(chan struct{})
+	go func() {
+		defer close(persistDone)
+		m.persistLoop(ctx, stopPersist)
+	}()
+
 	m.log.InfoContext(ctx, "incident manager started")
 	for {
 		select {
 		case <-ctx.Done():
 			<-notifyDone
+			// The notifier is finished now, so nothing new can ask for a save while we write the last ones.
+			close(stopPersist)
+			<-persistDone
 			m.log.InfoContext(ctx, "incident manager stopped", slog.Uint64("dropped_notifications", m.dropped.Load()))
 			return nil
 		case sample, ok := <-samples:
@@ -190,9 +217,10 @@ func (m *Manager) handleSample(ctx context.Context, sample chaos.MetricSample) {
 
 	m.mu.Lock()
 	if id, ok := m.bySim[sample.SimulationID]; ok {
-		job, changed := m.noteNewBreachesLocked(id, sample.Breaches)
+		job, seq, changed := m.noteNewBreachesLocked(id, sample.Breaches)
 		m.mu.Unlock()
 		if changed {
+			m.persist(ctx, persistJob{id: id, appendEntry: true, seq: seq, entry: job.entry})
 			m.enqueue(ctx, job)
 		}
 		return
@@ -229,14 +257,15 @@ func (m *Manager) handleSample(ctx context.Context, sample chaos.MetricSample) {
 		slog.String("severity", string(snap.Severity)),
 		slog.Any("breaches", snap.Breaches),
 	)
+	m.persist(ctx, persistJob{id: id})
 	m.enqueue(ctx, notification{kind: notifyDeclared, inc: snap})
 }
 
 // noteNewBreachesLocked adds a story line when a limit breaks that we have not seen before.
-func (m *Manager) noteNewBreachesLocked(id IncidentID, breaches []string) (notification, bool) {
+func (m *Manager) noteNewBreachesLocked(id IncidentID, breaches []string) (notification, int, bool) {
 	inc := m.incidents[id]
 	if inc.Status != StatusDeclared && inc.Status != StatusAcknowledged {
-		return notification{}, false
+		return notification{}, 0, false
 	}
 	var fresh []string
 	for _, b := range breaches {
@@ -246,10 +275,10 @@ func (m *Manager) noteNewBreachesLocked(id IncidentID, breaches []string) (notif
 		}
 	}
 	if len(fresh) == 0 {
-		return notification{}, false
+		return notification{}, 0, false
 	}
-	entry := inc.AddEntry(m.now(), ActorSystem, "New SLO breach: "+strings.Join(fresh, ", "))
-	return notification{kind: notifyTimelineEntry, inc: inc.Clone(), entry: entry}, true
+	entry := inc.AddEntry(m.now(), ActorSystem, newBreachPrefix+strings.Join(fresh, ", "))
+	return notification{kind: notifyTimelineEntry, inc: inc.Clone(), entry: entry}, len(inc.Timeline) - 1, true
 }
 
 // handleEvent remembers running simulations and marks an incident mitigated when its simulation ends.
@@ -278,6 +307,7 @@ func (m *Manager) handleEvent(ctx context.Context, ev chaos.Event) {
 			slog.String("incident_id", string(job.inc.ID)),
 			slog.String("simulation_id", string(simID)),
 		)
+		m.persist(ctx, persistJob{id: job.inc.ID})
 		m.enqueue(ctx, job)
 	}
 }
@@ -348,6 +378,7 @@ func (m *Manager) Mitigate(ctx context.Context, id IncidentID, actor string) (In
 		}
 		m.mu.Unlock()
 		if changed {
+			m.persist(ctx, persistJob{id: id})
 			m.enqueue(ctx, job)
 		}
 		return Incident{}, fmt.Errorf("mitigate incident %s: halt simulation: %w", id, haltErr)
@@ -361,6 +392,7 @@ func (m *Manager) Mitigate(ctx context.Context, id IncidentID, actor string) (In
 	m.mu.Unlock()
 
 	m.logStatus(ctx, snap, actor)
+	m.persist(ctx, persistJob{id: id})
 	m.enqueue(ctx, notification{kind: notifyStatusChanged, inc: snap})
 	return snap, nil
 }
@@ -385,6 +417,7 @@ func (m *Manager) transition(ctx context.Context, id IncidentID, next Status, ac
 	m.mu.Unlock()
 
 	m.logStatus(ctx, snap, actor)
+	m.persist(ctx, persistJob{id: id})
 	m.enqueue(ctx, notification{kind: notifyStatusChanged, inc: snap})
 	return snap, nil
 }
@@ -478,18 +511,20 @@ func (m *Manager) deliver(ctx context.Context, job notification) error {
 	m.mu.Lock()
 	if inc, ok := m.incidents[job.inc.ID]; ok {
 		job.inc.ChannelID = inc.ChannelID
+		job.inc.CardTimestamp = inc.CardTimestamp
 	}
 	m.mu.Unlock()
 
 	switch job.kind {
 	case notifyDeclared:
-		channelID, err := m.notifier.IncidentDeclared(ctx, job.inc)
-		if channelID != "" {
+		where, err := m.notifier.IncidentDeclared(ctx, job.inc)
+		if where != (Announcement{}) {
 			m.mu.Lock()
 			if inc, ok := m.incidents[job.inc.ID]; ok {
-				inc.ChannelID = channelID
+				inc.ChannelID, inc.CardTimestamp = where.ChannelID, where.CardTimestamp
 			}
 			m.mu.Unlock()
+			m.persist(ctx, persistJob{id: job.inc.ID})
 		}
 		if err != nil {
 			return fmt.Errorf("notify incident declared: %w", err)

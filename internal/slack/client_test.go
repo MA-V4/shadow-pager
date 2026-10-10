@@ -113,19 +113,28 @@ func declared(t *testing.T) incident.Incident {
 	return inc
 }
 
+// withCard gives back the incident with the card timestamp filled in, as the manager would hand it over.
+func withCard(inc incident.Incident, cardTS string) incident.Incident {
+	inc.CardTimestamp = cardTS
+	return inc
+}
+
 // TESTS
 
 func TestIncidentDeclaredCreatesChannelAndCard(t *testing.T) {
 	fake := &fakeMessenger{}
 	c := newTestClient(fake, Config{InviteUserIDs: []string{"U1", "U2"}, AnnounceChannelID: "CANNOUNCE"})
 
-	channelID, err := c.IncidentDeclared(context.Background(), declared(t))
+	where, err := c.IncidentDeclared(context.Background(), declared(t))
 	if err != nil {
 		t.Fatalf("IncidentDeclared: %v", err)
 	}
 
-	if channelID != "C1" {
-		t.Errorf("channel id = %q, want C1", channelID)
+	if where.ChannelID != "C1" {
+		t.Errorf("channel id = %q, want C1", where.ChannelID)
+	}
+	if where.CardTimestamp != "1700000000.000001" {
+		t.Errorf("card timestamp = %q, want the timestamp of the card message", where.CardTimestamp)
 	}
 	if want := []string{"inc-20260102-payments-api-0001"}; strings.Join(fake.created, ",") != strings.Join(want, ",") {
 		t.Errorf("created channels = %v, want %v", fake.created, want)
@@ -191,7 +200,7 @@ func TestCreateChannelRetriesWhenNameIsTaken(t *testing.T) {
 	fake := &fakeMessenger{createErrs: []error{errSlackNameTaken, errSlackNameTaken}}
 	c := newTestClient(fake, Config{})
 
-	channelID, err := c.IncidentDeclared(context.Background(), declared(t))
+	where, err := c.IncidentDeclared(context.Background(), declared(t))
 	if err != nil {
 		t.Fatalf("IncidentDeclared: %v", err)
 	}
@@ -204,8 +213,8 @@ func TestCreateChannelRetriesWhenNameIsTaken(t *testing.T) {
 	if strings.Join(fake.created, ",") != strings.Join(want, ",") {
 		t.Errorf("tried names %v, want %v", fake.created, want)
 	}
-	if channelID != "C3" {
-		t.Errorf("channel id = %q, want the third try C3", channelID)
+	if where.ChannelID != "C3" {
+		t.Errorf("channel id = %q, want the third try C3", where.ChannelID)
 	}
 }
 
@@ -237,12 +246,12 @@ func TestCreateChannelGivesUp(t *testing.T) {
 			fake := &fakeMessenger{createErrs: tc.createErrs}
 			c := newTestClient(fake, Config{InviteUserIDs: []string{"U1"}, AnnounceChannelID: "CANNOUNCE"})
 
-			channelID, err := c.IncidentDeclared(context.Background(), declared(t))
+			where, err := c.IncidentDeclared(context.Background(), declared(t))
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("error = %v, want one that wraps %v", err, tc.wantErr)
 			}
-			if channelID != "" {
-				t.Errorf("channel id = %q, want empty when no channel was made", channelID)
+			if where != (incident.Announcement{}) {
+				t.Errorf("announcement = %+v, want empty when no channel was made", where)
 			}
 			if len(fake.created) != tc.wantTries {
 				t.Errorf("tried %d names, want %d", len(fake.created), tc.wantTries)
@@ -259,12 +268,12 @@ func TestIncidentDeclaredKeepsGoingWhenInviteFails(t *testing.T) {
 	fake := &fakeMessenger{inviteErr: inviteErr}
 	c := newTestClient(fake, Config{InviteUserIDs: []string{"U404"}})
 
-	channelID, err := c.IncidentDeclared(context.Background(), declared(t))
+	where, err := c.IncidentDeclared(context.Background(), declared(t))
 	if !errors.Is(err, inviteErr) {
 		t.Fatalf("error = %v, want one that wraps the invite error", err)
 	}
-	if channelID != "C1" {
-		t.Errorf("channel id = %q, want C1 so the manager can still remember the channel", channelID)
+	if where.ChannelID != "C1" || where.CardTimestamp == "" {
+		t.Errorf("announcement = %+v, want C1 and a card so the manager can still remember them", where)
 	}
 	if len(fake.posts) != 1 {
 		t.Errorf("posted %d messages, want the card even though the invite failed", len(fake.posts))
@@ -275,12 +284,13 @@ func TestStatusChangedUpdatesCardAndPostsTimeline(t *testing.T) {
 	fake := &fakeMessenger{}
 	c := newTestClient(fake, Config{})
 	ctx := context.Background()
-	if _, err := c.IncidentDeclared(ctx, declared(t)); err != nil {
+	where, err := c.IncidentDeclared(ctx, declared(t))
+	if err != nil {
 		t.Fatalf("IncidentDeclared: %v", err)
 	}
-	cardTS := "1700000000.000001"
+	cardTS := where.CardTimestamp
 
-	if err := c.StatusChanged(ctx, testIncident(t, incident.StatusAcknowledged)); err != nil {
+	if err := c.StatusChanged(ctx, withCard(testIncident(t, incident.StatusAcknowledged), cardTS)); err != nil {
 		t.Fatalf("StatusChanged to acknowledged: %v", err)
 	}
 
@@ -303,7 +313,7 @@ func TestStatusChangedUpdatesCardAndPostsTimeline(t *testing.T) {
 	}
 
 	postsBefore := len(fake.posts)
-	resolved := testIncident(t, incident.StatusAcknowledged, incident.StatusResolved)
+	resolved := withCard(testIncident(t, incident.StatusAcknowledged, incident.StatusResolved), cardTS)
 	if err := c.StatusChanged(ctx, resolved); err != nil {
 		t.Fatalf("StatusChanged to resolved: %v", err)
 	}
@@ -353,11 +363,9 @@ func TestStatusChangedErrors(t *testing.T) {
 		updateErr := errors.New("ratelimited")
 		fake := &fakeMessenger{updateErr: updateErr}
 		c := newTestClient(fake, Config{})
-		if _, err := c.IncidentDeclared(ctx, declared(t)); err != nil {
-			t.Fatalf("IncidentDeclared: %v", err)
-		}
+		acknowledged := withCard(testIncident(t, incident.StatusAcknowledged), "1700000000.000001")
 
-		if err := c.StatusChanged(ctx, testIncident(t, incident.StatusAcknowledged)); !errors.Is(err, updateErr) {
+		if err := c.StatusChanged(ctx, acknowledged); !errors.Is(err, updateErr) {
 			t.Fatalf("error = %v, want one that wraps the update error", err)
 		}
 	})

@@ -113,7 +113,6 @@ type Client struct {
 	suffix func() (string, error)
 
 	mu             sync.Mutex
-	cards          map[incident.IncidentID]string // the message timestamp of each incident card
 	joinedAnnounce bool
 }
 
@@ -135,19 +134,19 @@ func newClient(api messenger, cfg Config, logger *slog.Logger) *Client {
 		cfg:    cfg,
 		log:    logger.With(slog.String("component", "slack")),
 		suffix: randomSuffix,
-		cards:  make(map[incident.IncidentID]string),
 	}
 }
 
 // NOTIFIER
 
 // IncidentDeclared makes the incident channel, invites people, and posts the incident card.
-func (c *Client) IncidentDeclared(ctx context.Context, inc incident.Incident) (string, error) {
+func (c *Client) IncidentDeclared(ctx context.Context, inc incident.Incident) (incident.Announcement, error) {
 	channelID, err := c.createChannel(ctx, inc)
 	if err != nil {
-		return "", err
+		return incident.Announcement{}, err
 	}
 	inc.ChannelID = channelID
+	where := incident.Announcement{ChannelID: channelID}
 
 	// The channel exists now, so later problems are collected instead of stopping the rest.
 	var errs []error
@@ -161,15 +160,14 @@ func (c *Client) IncidentDeclared(ctx context.Context, inc incident.Incident) (s
 	if err != nil {
 		errs = append(errs, fmt.Errorf("post incident card to %s: %w", channelID, err))
 	} else {
-		c.mu.Lock()
-		c.cards[inc.ID] = ts
-		c.mu.Unlock()
+		// The manager keeps this timestamp with the incident, so the card can be found again after a restart.
+		where.CardTimestamp = ts
 	}
 
 	if err := c.announce(ctx, inc); err != nil {
 		errs = append(errs, err)
 	}
-	return channelID, errors.Join(errs...)
+	return where, errors.Join(errs...)
 }
 
 // createChannel makes a public channel and tries a new ending when the name is already used.
@@ -232,17 +230,9 @@ func (c *Client) StatusChanged(ctx context.Context, inc incident.Incident) error
 
 	var errs []error
 
-	c.mu.Lock()
-	ts, ok := c.cards[inc.ID]
-	if inc.Status == incident.StatusResolved {
-		// A resolved incident never changes again, so we can forget its card.
-		delete(c.cards, inc.ID)
-	}
-	c.mu.Unlock()
-
-	if !ok {
+	if inc.CardTimestamp == "" {
 		errs = append(errs, fmt.Errorf("update card for incident %s: %w", inc.ID, errNoCard))
-	} else if err := c.api.UpdateMessage(ctx, inc.ChannelID, ts, cardTitle(inc), cardBlocks(inc)); err != nil {
+	} else if err := c.api.UpdateMessage(ctx, inc.ChannelID, inc.CardTimestamp, cardTitle(inc), cardBlocks(inc)); err != nil {
 		errs = append(errs, fmt.Errorf("update card for incident %s: %w", inc.ID, err))
 	}
 
