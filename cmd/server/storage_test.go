@@ -265,8 +265,11 @@ func TestRunSurvivesRestartsWithDatabase(t *testing.T) {
 	// THIRD RUN: the halt and the mitigation were saved, so nothing is running and nothing is mitigated twice.
 	third := startServer(t, env)
 
-	if sims := third.simulations(); len(sims) != 0 {
-		t.Errorf("simulations after the second restart = %+v, want none because the only one was halted", sims)
+	if sims := third.simulations(); len(sims) != 1 || sims[0].ID != sim.ID || sims[0].State != "halted" {
+		t.Errorf("simulations after the second restart = %+v, want %s listed from history as halted", sims, sim.ID)
+	}
+	if status, body := call(t, http.MethodGet, third.base+"/simulations/"+sim.ID, ""); status != http.StatusOK || !strings.Contains(body, `"state":"halted"`) {
+		t.Errorf("GET the finished simulation after the second restart = %d %s, want it found in history", status, body)
 	}
 	final := third.incidents()
 	if len(final) != 1 || final[0].Status != "mitigated" {

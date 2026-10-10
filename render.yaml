@@ -23,3 +23,12 @@ services:
       # The database password is part of this URL, so it is typed into the Render dashboard too.
       - key: DATABASE_URL
         sync: false
+      # The admin token is a secret, and the allowed website is your own Vercel address, so both are typed into the dashboard.
+      - key: ADMIN_TOKEN
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: RATE_LIMIT_BURST
+        value: "5"
+      - key: RATE_LIMIT_REFILL
+        value: 30s

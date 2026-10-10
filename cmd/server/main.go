@@ -26,7 +26,9 @@ import (
 	"github.com/MA-V4/shadow-pager/internal/api"
 	"github.com/MA-V4/shadow-pager/internal/chaos"
 	"github.com/MA-V4/shadow-pager/internal/incident"
+	"github.com/MA-V4/shadow-pager/internal/ratelimit"
 	"github.com/MA-V4/shadow-pager/internal/slack"
+	"github.com/MA-V4/shadow-pager/internal/status"
 	"github.com/MA-V4/shadow-pager/internal/storage"
 )
 
@@ -61,6 +63,11 @@ type config struct {
 	SlackAnnounceChannelID string
 
 	DatabaseURL string
+
+	AdminToken         string
+	RateLimitBurst     int
+	RateLimitRefill    time.Duration
+	CORSAllowedOrigins []string
 }
 
 // loadConfig is a pure function of its input, so it takes no context.
@@ -115,7 +122,49 @@ func loadConfig(getenv func(string) string) (config, error) {
 
 	cfg.DatabaseURL = strings.TrimSpace(getenv("DATABASE_URL"))
 
+	if err := loadProtectionConfig(getenv, &cfg); err != nil {
+		return config{}, err
+	}
+
 	return cfg, nil
+}
+
+// errProtectionConfig means a rate limit setting cannot be used.
+var errProtectionConfig = errors.New("invalid protection config")
+
+const (
+	defaultRateLimitBurst  = 5                // how many injects or halts one caller may do in one go
+	defaultRateLimitRefill = 30 * time.Second // how long a caller waits to earn one more
+	globalRateLimitBurst   = 20               // how many injects or halts all callers together may do in one go
+	globalRateLimitRefill  = 15 * time.Second // how long everyone waits together to earn one more
+)
+
+// loadProtectionConfig reads the admin token, the rate limit and the list of websites that may call the API.
+func loadProtectionConfig(getenv func(string) string, cfg *config) error {
+	cfg.AdminToken = strings.TrimSpace(getenv("ADMIN_TOKEN"))
+	cfg.RateLimitBurst = defaultRateLimitBurst
+	cfg.RateLimitRefill = defaultRateLimitRefill
+
+	if raw := strings.TrimSpace(getenv("RATE_LIMIT_BURST")); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil || v < 1 {
+			return fmt.Errorf("%w: RATE_LIMIT_BURST must be a whole number of at least 1", errProtectionConfig)
+		}
+		cfg.RateLimitBurst = v
+	}
+	if raw := strings.TrimSpace(getenv("RATE_LIMIT_REFILL")); raw != "" {
+		v, err := time.ParseDuration(raw)
+		if err != nil || v <= 0 {
+			return fmt.Errorf("%w: RATE_LIMIT_REFILL must be a time like 30s", errProtectionConfig)
+		}
+		cfg.RateLimitRefill = v
+	}
+	for _, origin := range strings.Split(getenv("CORS_ALLOWED_ORIGINS"), ",") {
+		if origin = strings.TrimSpace(origin); origin != "" {
+			cfg.CORSAllowedOrigins = append(cfg.CORSAllowedOrigins, origin)
+		}
+	}
+	return nil
 }
 
 // errSlackConfig means the Slack settings do not make sense together.
@@ -228,7 +277,7 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 	recorderCtx, cancelRecorder := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancelRecorder()
 	recorderDone := make(chan struct{})
-	var dbPing func(context.Context) error
+	var db *pingCache
 	if store != nil {
 		if err := incidents.Restore(ctx, restored); err != nil {
 			return fmt.Errorf("restore incidents: %w", err)
@@ -241,14 +290,46 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 			defer close(recorderDone)
 			recorder.Run()
 		}()
-		dbPing = store.Ping
+		db = newPingCache(store.Ping, time.Now, logger)
 	} else {
 		close(recorderDone)
 	}
 	var listener *slack.Listener
 	if slackClient != nil {
-		listener = slack.NewListener(slackClient, incidents, engine, logger)
+		// Slack users get the same small number of turns as callers of the HTTP API.
+		slackLimit := ratelimit.New(cfg.RateLimitBurst, cfg.RateLimitRefill)
+		listener = slack.NewListener(slackClient, incidents, engine, logger, slack.WithWriteLimit(slackLimit))
 	}
+
+	// The status page reads from this picture, which is kept fresh from the engine's samples.
+	statusCtx, cancelStatus := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancelStatus()
+	statusBoard, err := status.NewAggregator(statusCtx, engine, incidents, logger)
+	if err != nil {
+		return fmt.Errorf("build status aggregator: %w", err)
+	}
+	go statusBoard.Run()
+
+	apiOpts := []api.Option{
+		api.WithIncidents(incidents),
+		api.WithStatus(statusBoard),
+		api.WithSLO(chaos.DefaultSLO),
+		api.WithWriteProtection(api.WriteProtection{
+			PerClient:  ratelimit.New(cfg.RateLimitBurst, cfg.RateLimitRefill),
+			Global:     ratelimit.New(globalRateLimitBurst, globalRateLimitRefill),
+			AdminToken: cfg.AdminToken,
+		}),
+	}
+	if store != nil {
+		// History comes after the incidents option, because it wraps what that option set up.
+		apiOpts = append(apiOpts, api.WithHistory(store))
+	}
+	logger.InfoContext(ctx, "write protection ready",
+		slog.Bool("admin_token_required", cfg.AdminToken != ""),
+		slog.Int("rate_limit_burst", cfg.RateLimitBurst),
+		slog.Duration("rate_limit_refill", cfg.RateLimitRefill),
+		slog.Int("cors_allowed_origins", len(cfg.CORSAllowedOrigins)),
+	)
 
 	// draining flips to true the moment shutdown begins, so /readyz starts
 	// failing and the platform stops routing new traffic to this instance.
@@ -259,7 +340,7 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 	defer cancelStreams()
 
 	srv := &http.Server{
-		Handler:           newRouter(logger, engine, api.NewHandler(engine, logger, streamCtx, api.WithIncidents(incidents)), &draining, dbPing),
+		Handler:           newRouter(logger, engine, api.NewHandler(engine, logger, streamCtx, apiOpts...), &draining, db, cfg.CORSAllowedOrigins),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		// Streaming handlers (Phase 3) extend their own deadline through
@@ -466,16 +547,14 @@ func shutdown(
 
 // HTTP
 
-// readyzDatabaseTimeout is how long the database may take to answer the readiness check.
-const readyzDatabaseTimeout = 2 * time.Second
-
-func newRouter(logger *slog.Logger, engine *chaos.Engine, apiHandler *api.Handler, draining *atomic.Bool, dbPing func(context.Context) error) http.Handler {
+func newRouter(logger *slog.Logger, engine *chaos.Engine, apiHandler *api.Handler, draining *atomic.Bool, db *pingCache, corsOrigins []string) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
+	r.Use(api.CORS(corsOrigins))
 
 	started := time.Now()
 
@@ -502,16 +581,12 @@ func newRouter(logger *slog.Logger, engine *chaos.Engine, apiHandler *api.Handle
 			checks["lifecycle"] = "draining"
 			status = http.StatusServiceUnavailable
 		}
-		// The database is only asked when there is one, and it gets a short time to answer.
-		if dbPing != nil {
-			pingCtx, cancel := context.WithTimeout(r.Context(), readyzDatabaseTimeout)
-			err := dbPing(pingCtx)
-			cancel()
+		// The probe reads the remembered answer, so it never waits for the database and rarely wakes it.
+		if db != nil {
 			checks["database"] = "ok"
-			if err != nil {
+			if db.Err() != nil {
 				checks["database"] = "unreachable"
 				status = http.StatusServiceUnavailable
-				logger.WarnContext(r.Context(), "readyz database check failed", slog.Any("error", err))
 			}
 		}
 
