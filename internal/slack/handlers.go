@@ -50,16 +50,18 @@ type Listener struct {
 	incidents incidents
 	sims      simulations
 	log       *slog.Logger
+
+	writes writeLimiter // nil means Slack users may inject and halt as often as they like
 }
 
 // NewListener builds a Listener that uses the same Slack connection settings as the Client.
-func NewListener(client *Client, inc incidents, sims simulations, logger *slog.Logger) *Listener {
+func NewListener(client *Client, inc incidents, sims simulations, logger *slog.Logger, opts ...ListenerOption) *Listener {
 	logger = logger.With(slog.String("component", "slack"))
 	// The Slack library writes its own log lines, and this sends them into our structured log.
 	socket := socketmode.New(client.raw,
 		socketmode.OptionLog(slog.NewLogLogger(logger.Handler(), slog.LevelDebug)),
 	)
-	return &Listener{
+	l := &Listener{
 		run:       socket.RunContext,
 		events:    socket.Events,
 		ack:       socket,
@@ -68,6 +70,10 @@ func NewListener(client *Client, inc incidents, sims simulations, logger *slog.L
 		sims:      sims,
 		log:       logger,
 	}
+	for _, opt := range opts {
+		opt(l)
+	}
+	return l
 }
 
 // Run keeps the Socket Mode connection open and handles requests until ctx is done.
@@ -237,10 +243,16 @@ func (l *Listener) routeCommand(ctx context.Context, cmd slackapi.SlashCommand) 
 	case "help":
 		return helpText
 	case "inject":
+		if reply, limited := l.overLimit(cmd.UserID); limited {
+			return reply
+		}
 		return l.commandInject(ctx, args[1:])
 	case "list":
 		return l.commandList(ctx)
 	case "halt":
+		if reply, limited := l.overLimit(cmd.UserID); limited {
+			return reply
+		}
 		return l.commandHalt(ctx, args[1:])
 	default:
 		return fmt.Sprintf("I do not know the command `%s`.\n%s", args[0], helpText)
