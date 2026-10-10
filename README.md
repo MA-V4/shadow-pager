@@ -122,3 +122,109 @@ set. With Docker:
 `TEST_DATABASE_URL` must be written as a URL. Every test creates its own schema named
 `test_...` and drops it afterwards, so tests never see the rows of another test. Do not
 point it at a database you care about.
+
+## Screenshots
+
+### Dashboard
+
+### Incidents
+
+### Incident detail
+
+### Status page
+
+## Frontend
+
+The web app lives in `web/`: Vite, React, TypeScript, Tailwind and shadcn/ui style
+components. It has three areas:
+
+| URL              | What it shows                                                      |
+|------------------|--------------------------------------------------------------------|
+| `/`              | Dashboard: inject a failure, live charts with SLO lines, halt.     |
+| `/incidents`     | Every incident, newest first, with a detail page and its timeline. |
+| `/status`        | Public status page: overall banner, services, active incidents.    |
+
+### Run it locally
+
+Start the API first (see "Run locally" above), then in a second terminal:
+
+    cd web
+    npm install
+    npm run dev
+
+Open http://localhost:5173. The dev server forwards every `/api` call to
+`http://localhost:8080`, so `VITE_API_URL` stays empty in local development. The four
+checks that CI runs are:
+
+    npm run typecheck
+    npm run lint
+    npm test
+    npm run build
+
+## API protection
+
+The API is meant to be shown in public, so the endpoints that change something are guarded.
+
+- **Rate limit.** Injecting and halting are limited per caller IP address with a token
+  bucket: `RATE_LIMIT_BURST` requests in a row (default 5), then one more every
+  `RATE_LIMIT_REFILL` (default 30s). A limited request gets `429` with a `Retry-After`
+  header. A second, shared bucket caps what all callers can do together. Slack users get
+  the same limit on `/shadowpager inject` and `/shadowpager halt`.
+- **Admin token.** When `ADMIN_TOKEN` is set, injecting and halting need the header
+  `Authorization: Bearer <token>`. When it is not set they stay open, but rate limited.
+  Reading is always open.
+- **CORS.** Only the websites listed in `CORS_ALLOWED_ORIGINS` (comma separated) may call
+  the API from a browser.
+
+## Deploy guide
+
+The whole stack runs on free plans: Neon for Postgres, Render for the API, Vercel for the
+web app. Do the steps in this order, because each one needs an address from the one before.
+
+### 1. Neon (database)
+
+1. Create a project in the Neon console.
+2. Open **Connect**, switch **Connection pooling** on, and copy the connection string.
+   This is your `DATABASE_URL`.
+
+### 2. Render (API)
+
+1. In Render choose **New**, then **Blueprint**, and pick this repository. Render reads
+   `render.yaml` and creates the web service.
+2. Fill in the variables that Render asks for (the ones marked `sync: false`):
+
+| Variable                    | Value                                                              |
+|-----------------------------|--------------------------------------------------------------------|
+| `DATABASE_URL`              | The pooled Neon connection string from step 1.                     |
+| `ADMIN_TOKEN`               | A long random text. Leave empty to keep writes open.               |
+| `CORS_ALLOWED_ORIGINS`      | Your Vercel address from step 3, for example `https://shadow-pager.vercel.app`. Set it after step 3. |
+| `SLACK_APP_TOKEN`           | Optional. The `xapp-` token from "Slack setup".                    |
+| `SLACK_BOT_TOKEN`           | Optional. The `xoxb-` token from "Slack setup".                    |
+| `SLACK_INVITE_USER_IDS`     | Optional. Comma separated Slack member IDs.                        |
+| `SLACK_ANNOUNCE_CHANNEL_ID` | Optional. A public Slack channel ID.                               |
+
+   `APP_ENV`, `LOG_LEVEL`, `RATE_LIMIT_BURST` and `RATE_LIMIT_REFILL` already have values
+   in `render.yaml`. `PORT` is set by Render itself. `HOST` must stay unset on Render.
+3. Wait for the first deploy and note the service address, for example
+   `https://shadow-pager-api.onrender.com`. Check it with `/healthz` and `/readyz`.
+
+### 3. Vercel (web app)
+
+1. In Vercel choose **Add New**, then **Project**, and import this repository.
+2. Set **Root Directory** to `web`. Vercel then finds `web/vercel.json`, which also makes
+   addresses like `/incidents/inc_123` work when the page is refreshed.
+3. Add one environment variable:
+
+| Variable       | Value                                                                    |
+|----------------|--------------------------------------------------------------------------|
+| `VITE_API_URL` | The Render address from step 2, without a slash at the end.              |
+
+4. Deploy, then copy the Vercel address into `CORS_ALLOWED_ORIGINS` on Render and let
+   Render redeploy. Without this the browser blocks every call from the web app.
+
+### 4. Check it
+
+1. Open the Vercel address. The first load can show "Waking up the server" for up to a
+   minute, because the free Render plan sleeps when idle.
+2. On the dashboard, enter the admin token if you set one, and inject a failure.
+3. Watch the charts cross the dashed SLO lines, then open `/incidents` and `/status`.
