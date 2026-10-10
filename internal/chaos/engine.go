@@ -98,6 +98,8 @@ func (s Scenario) Validate() error {
 	var errs []error
 	if s.Service == "" {
 		errs = append(errs, fmt.Errorf("%w: service is required", ErrInvalidScenario))
+	} else if !validServiceName(s.Service) {
+		errs = append(errs, fmt.Errorf("%w: service must be at most %d letters, digits, dots, dashes or underscores", ErrInvalidScenario, maxServiceNameLength))
 	}
 	if !s.Mode.Valid() {
 		errs = append(errs, fmt.Errorf("%w: unknown failure mode %q", ErrInvalidScenario, s.Mode))
