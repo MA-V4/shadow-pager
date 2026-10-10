@@ -99,10 +99,18 @@ type listIncidentsResponse struct {
 
 // listIncidents sends back every incident, newest first.
 func (h *Handler) listIncidents(w http.ResponseWriter, r *http.Request) {
+	limit, err := parseLimit(r)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
 	incidents, err := h.incidents.List(r.Context())
 	if err != nil {
 		h.writeError(w, r, err)
 		return
+	}
+	if len(incidents) > limit {
+		incidents = incidents[:limit]
 	}
 
 	out := make([]incidentResponse, 0, len(incidents))

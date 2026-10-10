@@ -121,10 +121,18 @@ func (h *Handler) createSimulation(w http.ResponseWriter, r *http.Request) {
 
 // listSimulations sends back every simulation, newest first.
 func (h *Handler) listSimulations(w http.ResponseWriter, r *http.Request) {
+	limit, err := parseLimit(r)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
 	sims, err := h.sim.List(r.Context())
 	if err != nil {
 		h.writeError(w, r, err)
 		return
+	}
+	if len(sims) > limit {
+		sims = sims[:limit]
 	}
 
 	// We start with an empty list so JSON shows [] and never null.
