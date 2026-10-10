@@ -103,7 +103,7 @@ describe('IncidentsPage', () => {
 
     renderAt('/incidents')
 
-    expect(await screen.findByText('The incidents could not be loaded')).toBeTruthy()
+    expect(await screen.findByText('Could not load the incidents')).toBeTruthy()
     expect(screen.getByText('internal server error')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
   })
@@ -117,14 +117,20 @@ describe('IncidentDetailPage', () => {
 
     renderAt('/incidents/inc_closed')
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'Cpu saturation on checkout' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { level: 1, name: 'CPU saturation on checkout' })).toBeTruthy()
     expect(get.mock.calls[0]?.[0]).toBe('inc_closed')
 
     expect(term('Time to acknowledge')).toBe('1m 30s')
     expect(term('Time to resolve')).toBe('5m')
-    expect(term('Acknowledged')).toContain('by Slack user U123ABC')
-    expect(term('SLO breaches at declaration')).toBe('Latency p99Error rate')
+    expect(term('Acknowledged by')).toBe('Slack user U123ABC')
+    expect(term('SLO breaches at declaration')).toBe('Latency p99, Error rate')
     expect(term('Simulation')).toBe('sim_1')
+
+    // This incident went from acknowledged straight to resolved, and the lifecycle says so.
+    const steps = within(screen.getByRole('list', { name: 'Lifecycle' })).getAllByRole('listitem')
+    expect(steps.map((s) => s.firstElementChild?.textContent)).toEqual(['Declared', 'Acknowledged', 'Mitigated', 'Resolved'])
+    expect(steps[2]?.textContent).toContain('Skipped')
+    expect(steps[3]?.textContent).not.toContain('Not yet')
 
     const timeline = screen.getByRole('list', { name: 'Timeline, oldest first' })
     const entries = within(timeline).getAllByRole('listitem')
@@ -147,7 +153,9 @@ describe('IncidentDetailPage', () => {
     await screen.findByRole('heading', { level: 1 })
     expect(term('Time to acknowledge')).toBe('Not acknowledged')
     expect(term('Time to resolve')).toBe('Not resolved yet')
-    expect(term('Resolved')).toBe('-')
+    expect(term('Acknowledged by')).toBe('-')
+    const steps = within(screen.getByRole('list', { name: 'Lifecycle' })).getAllByRole('listitem')
+    expect(steps.slice(1).every((s) => s.textContent?.includes('Not yet'))).toBe(true)
   })
 
   it('has a friendly message for an incident that does not exist', async () => {
@@ -156,7 +164,7 @@ describe('IncidentDetailPage', () => {
     renderAt('/incidents/inc_x')
 
     expect(await screen.findByText('This incident does not exist')).toBeTruthy()
-    expect(screen.queryByText('The incident could not be loaded')).toBeNull()
+    expect(screen.queryByText('Could not load the incident')).toBeNull()
   })
 
   it('shows other errors with a way to try again', async () => {
@@ -164,7 +172,7 @@ describe('IncidentDetailPage', () => {
 
     renderAt('/incidents/inc_x')
 
-    expect(await screen.findByText('The incident could not be loaded')).toBeTruthy()
+    expect(await screen.findByText('Could not load the incident')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
   })
 })
