@@ -41,6 +41,9 @@ type Handler struct {
 	shutdown  context.Context // done when the server starts to turn off
 	heartbeat time.Duration   // how often a quiet stream says hello
 	incidents incidentSource
+
+	writeGuards []func(http.Handler) http.Handler // every request that changes something passes through these first
+	extraRoutes []func(chi.Router)                // routes that options bring along
 }
 
 // NewHandler builds a Handler from the things it needs to do its job.
@@ -68,16 +71,23 @@ func (h *Handler) Routes() chi.Router {
 		h.writeJSON(w, r, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
 	})
 
-	r.Post("/simulations", h.createSimulation)
+	// Requests that change something have to pass the guards first, when there are any.
+	write := r.With(h.writeGuards...)
+	write.Post("/simulations", h.createSimulation)
 	r.Get("/simulations", h.listSimulations)
 	r.Get("/simulations/{id}", h.getSimulation)
-	r.Post("/simulations/{id}/halt", h.haltSimulation)
+	write.Post("/simulations/{id}/halt", h.haltSimulation)
 	r.Get("/stream", h.streamMetrics)
 
 	// The incident routes only exist when someone gave us a place to read incidents from.
 	if h.incidents != nil {
 		r.Get("/incidents", h.listIncidents)
 		r.Get("/incidents/{id}", h.getIncident)
+	}
+
+	// Options can bring routes of their own, and this is where they are added.
+	for _, add := range h.extraRoutes {
+		add(r)
 	}
 
 	return r
