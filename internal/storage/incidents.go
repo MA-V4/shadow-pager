@@ -5,11 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/MA-V4/shadow-pager/internal/chaos"
 	"github.com/MA-V4/shadow-pager/internal/incident"
 )
 
@@ -105,8 +103,7 @@ func (s *Store) AppendTimeline(ctx context.Context, id incident.IncidentID, seq 
 
 // selectOpenIncidents also picks closed incidents whose simulation still runs, so that simulation never gets a second incident.
 const selectOpenIncidents = `
-SELECT i.id, i.simulation_id, i.service, i.mode, i.severity, i.status, i.breaches, i.declared_at,
-       i.acknowledged_at, i.acknowledged_by, i.mitigated_at, i.resolved_at, i.slack_channel_id, i.slack_card_ts
+SELECT ` + incidentColumns + `
 FROM incidents i
 WHERE i.status <> 'resolved'
    OR EXISTS (SELECT 1 FROM simulations s WHERE s.id = i.simulation_id AND s.state = 'running')
@@ -127,69 +124,18 @@ func (s *Store) LoadOpenIncidents(ctx context.Context) ([]incident.Incident, err
 	defer rows.Close()
 
 	var out []incident.Incident
-	var ids []string
 	for rows.Next() {
-		var (
-			id, simID, service, mode, severity, status string
-			acknowledgedBy, channelID, cardTS          string
-			breaches                                   []string
-			declaredAt                                 time.Time
-			acknowledgedAt, mitigatedAt, resolvedAt    *time.Time
-		)
-		err := rows.Scan(&id, &simID, &service, &mode, &severity, &status, &breaches, &declaredAt,
-			&acknowledgedAt, &acknowledgedBy, &mitigatedAt, &resolvedAt, &channelID, &cardTS)
+		inc, err := scanIncident(rows)
 		if err != nil {
 			return nil, fmt.Errorf("scan open incident: %w", err)
 		}
-		out = append(out, incident.Incident{
-			ID:             incident.IncidentID(id),
-			SimulationID:   chaos.SimulationID(simID),
-			Service:        service,
-			Mode:           chaos.FailureMode(mode),
-			Severity:       chaos.Severity(severity),
-			Status:         incident.Status(status),
-			Breaches:       breaches,
-			DeclaredAt:     declaredAt.UTC(),
-			AcknowledgedAt: utcOrNil(acknowledgedAt),
-			AcknowledgedBy: acknowledgedBy,
-			MitigatedAt:    utcOrNil(mitigatedAt),
-			ResolvedAt:     utcOrNil(resolvedAt),
-			ChannelID:      channelID,
-			CardTimestamp:  cardTS,
-		})
-		ids = append(ids, id)
+		out = append(out, inc)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read open incidents: %w", err)
 	}
-	if len(out) == 0 {
-		return nil, nil
-	}
-
-	// One more query fetches the stories of all those incidents, instead of one query per incident.
-	byID := make(map[string]int, len(out))
-	for i, id := range ids {
-		byID[id] = i
-	}
-	entries, err := s.pool.Query(ctx, selectTimelines, ids)
-	if err != nil {
-		return nil, fmt.Errorf("query incident timelines: %w", err)
-	}
-	defer entries.Close()
-
-	for entries.Next() {
-		var (
-			id, actor, body string
-			at              time.Time
-		)
-		if err := entries.Scan(&id, &at, &actor, &body); err != nil {
-			return nil, fmt.Errorf("scan timeline entry: %w", err)
-		}
-		i := byID[id]
-		out[i].Timeline = append(out[i].Timeline, incident.TimelineEntry{At: at.UTC(), Actor: actor, Text: body})
-	}
-	if err := entries.Err(); err != nil {
-		return nil, fmt.Errorf("read incident timelines: %w", err)
+	if err := s.attachTimelines(ctx, out); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

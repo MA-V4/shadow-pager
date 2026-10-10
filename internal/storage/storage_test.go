@@ -163,7 +163,11 @@ func TestMigrateFromManyInstancesAtOnce(t *testing.T) {
 			t.Errorf("Migrate while others migrate: %v", err)
 		}
 	}
-	if got := countRows(t, store, "schema_migrations"); got != 1 {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatalf("loadMigrations: %v", err)
+	}
+	if got := countRows(t, store, "schema_migrations"); got != len(migrations) {
 		t.Errorf("schema_migrations has %d rows, want each migration recorded exactly once", got)
 	}
 }
