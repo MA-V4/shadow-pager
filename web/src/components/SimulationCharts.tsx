@@ -1,40 +1,29 @@
 import type { MetricSample, Slo } from '../api/types'
-import { formatMetric, formatPercent } from '../lib/format'
-import { MetricChart, type MetricPoint } from './MetricChart'
+import { breachingMetrics, metricDefs, metricKeys } from '../lib/metrics'
+import { cn } from '../lib/utils'
+import { MetricChart, MetricTile } from './MetricChart'
 
-// points picks one metric out of the samples and turns it into chart points.
-function points(samples: readonly MetricSample[], pick: (sample: MetricSample) => number): MetricPoint[] {
-  return samples.map((sample) => ({ t: new Date(sample.timestamp).getTime(), v: pick(sample) }))
-}
-
-// SimulationCharts draws the four key metrics of one simulation side by side.
+// SimulationCharts gives every breaching metric a big chart and folds the healthy ones into small tiles below.
 export function SimulationCharts({ samples, slo }: { samples: readonly MetricSample[]; slo: Slo | undefined }) {
+  const breaching = breachingMetrics(samples.at(-1))
+  const healthy = metricKeys.filter((key) => !breaching.includes(key))
+
   return (
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      <MetricChart
-        title="Latency p99"
-        points={points(samples, (s) => s.latency_p99_ms)}
-        threshold={slo?.max_latency_p99_ms}
-        format={(v) => `${formatMetric(v)} ms`}
-      />
-      <MetricChart
-        title="Error rate"
-        points={points(samples, (s) => s.error_rate)}
-        threshold={slo?.max_error_rate}
-        format={formatPercent}
-      />
-      <MetricChart
-        title="CPU"
-        points={points(samples, (s) => s.cpu_percent)}
-        threshold={slo?.max_cpu_percent}
-        format={(v) => `${formatMetric(v)}%`}
-      />
-      <MetricChart
-        title="Memory"
-        points={points(samples, (s) => s.memory_mb)}
-        threshold={slo?.max_memory_mb}
-        format={(v) => `${formatMetric(v)} MB`}
-      />
+    <div className="flex flex-col gap-3">
+      {breaching.length > 0 ? (
+        <div className={cn('grid gap-3', breaching.length > 1 && 'xl:grid-cols-2')} aria-label="Metrics over their limit">
+          {breaching.map((key) => (
+            <MetricChart key={key} def={metricDefs[key]} samples={samples} threshold={slo ? metricDefs[key].threshold(slo) : undefined} />
+          ))}
+        </div>
+      ) : null}
+      {healthy.length > 0 ? (
+        <div className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 xl:grid-cols-4" aria-label="Metrics within their limit">
+          {healthy.map((key) => (
+            <MetricTile key={key} def={metricDefs[key]} samples={samples} threshold={slo ? metricDefs[key].threshold(slo) : undefined} />
+          ))}
+        </div>
+      ) : null}
     </div>
   )
 }

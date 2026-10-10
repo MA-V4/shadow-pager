@@ -53,7 +53,7 @@ export function splitInjectErrors(message: string): InjectErrors {
 // describeWriteError explains a failed inject or halt in words that say what to do next.
 export function describeWriteError(err: ApiError): string {
   if (err.status === 401) {
-    return 'This server only lets people with the admin token do that. Enter the token under Admin token and try again.'
+    return 'This server only lets people with the admin token do that. Open Settings in the header, enter the token, and try again.'
   }
   if (err.status === 429) {
     return err.retryAfterSeconds === undefined

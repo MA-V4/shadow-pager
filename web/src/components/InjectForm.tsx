@@ -1,35 +1,56 @@
-import { useEffect, useId, useState, type FormEvent } from 'react'
+import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react'
 
 import { api, toApiError } from '../api/client'
 import { failureModes, severities, type FailureMode, type Severity, type Simulation } from '../api/types'
+import { useAdminToken } from '../lib/adminToken'
 import { describeWriteError, splitInjectErrors, type InjectErrors, type InjectField } from '../lib/apiMessages'
-import { humanize } from '../lib/format'
-import { Alert } from './ui/alert'
+import { failureModeLabels, severityLabels } from '../lib/labels'
+import { cn } from '../lib/utils'
+import { StatusGlyph } from './StatusGlyph'
 import { Button } from './ui/button'
 import { Input, Select } from './ui/input'
 import { Label } from './ui/label'
 
 const noErrors: InjectErrors = { fields: {}, general: [] }
 
-// FieldError is the red line under a field, tied to the field so screen readers read it out.
-function FieldError({ id, message }: { id: string; message: string | undefined }) {
-  return message === undefined ? null : (
-    <p id={id} className="text-xs text-bad">
-      {message}
-    </p>
+// The order of the fields on screen, used to find the first one with a problem.
+const fieldOrder: InjectField[] = ['service', 'mode', 'severity', 'duration', 'intensity']
+
+// FIELD
+
+interface FieldProps {
+  id: string
+  label: string
+  hint: string
+  error: string | undefined
+  className?: string
+  children: ReactNode
+}
+
+// Field is a label, a control and one line below it that shows a hint or an error, so the form keeps its height.
+function Field({ id, label, hint, error, className, children }: FieldProps) {
+  return (
+    <div className={cn('flex min-w-0 flex-col gap-1.5', className)}>
+      <Label htmlFor={id}>{label}</Label>
+      {children}
+      <p id={`${id}-message`} className={cn('min-h-8 text-xs leading-4', error === undefined ? 'text-muted-foreground' : 'text-bad')}>
+        {error ?? hint}
+      </p>
+    </div>
   )
 }
 
+// FORM
+
 interface InjectFormProps {
-  // The admin token to send along, or an empty text when there is none.
-  token: string
   // Called with the new simulation after the server accepted it.
   onInjected: (simulation: Simulation) => void
 }
 
 // InjectForm starts a new pretend failure and shows the server's complaints right next to the fields they are about.
-export function InjectForm({ token, onInjected }: InjectFormProps) {
+export function InjectForm({ onInjected }: InjectFormProps) {
   const id = useId()
+  const [token] = useAdminToken()
   const [service, setService] = useState('payments-api')
   const [mode, setMode] = useState<FailureMode>('latency_spike')
   const [severity, setSeverity] = useState<Severity>('major')
@@ -50,6 +71,14 @@ export function InjectForm({ token, onInjected }: InjectFormProps) {
     return () => clearTimeout(timer)
   }, [waitSeconds])
 
+  // When the server points at fields, the first one gets the focus, so it can be fixed without hunting for it.
+  useEffect(() => {
+    const first = fieldOrder.find((field) => errors.fields[field] !== undefined)
+    if (first !== undefined) {
+      document.getElementById(`${id}-${first}`)?.focus()
+    }
+  }, [errors, id])
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setSubmitting(true)
@@ -57,7 +86,7 @@ export function InjectForm({ token, onInjected }: InjectFormProps) {
     setSuccess(null)
     try {
       const simulation = await api.createSimulation({ service: service.trim(), mode, severity, intensity, duration: duration.trim() }, token)
-      setSuccess(`Started ${humanize(simulation.mode).toLowerCase()} on ${simulation.service}. An incident is declared if it breaks its SLO.`)
+      setSuccess(`Started ${failureModeLabels[simulation.mode] ?? simulation.mode} on ${simulation.service}.`)
       onInjected(simulation)
     } catch (err) {
       const apiError = toApiError(err)
@@ -72,82 +101,63 @@ export function InjectForm({ token, onInjected }: InjectFormProps) {
     }
   }
 
-  // describedBy ties a field to its error line only while that line is on screen.
-  const describedBy = (field: InjectField) => (errors.fields[field] === undefined ? undefined : `${id}-${field}-error`)
+  // control gives every input the attributes that tie it to its label and its message line.
+  const control = (field: InjectField) => ({
+    id: `${id}-${field}`,
+    name: field,
+    'aria-invalid': errors.fields[field] !== undefined,
+    'aria-describedby': `${id}-${field}-message`,
+  })
 
   return (
-    <form onSubmit={(e) => void submit(e)} noValidate className="flex flex-col gap-4" aria-label="Inject a failure">
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${id}-service`}>Service</Label>
-          <Input
-            id={`${id}-service`}
-            value={service}
-            onChange={(e) => setService(e.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-            aria-invalid={errors.fields.service !== undefined}
-            aria-describedby={describedBy('service')}
-          />
-          <FieldError id={`${id}-service-error`} message={errors.fields.service} />
-        </div>
+    <form onSubmit={(e) => void submit(e)} noValidate className="flex flex-col gap-2" aria-label="Inject a failure">
+      <Field id={`${id}-service`} label="Service" hint="Letters, digits, dots, dashes and underscores." error={errors.fields.service}>
+        <Input
+          {...control('service')}
+          value={service}
+          onChange={(e) => setService(e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="payments-api…"
+          className="font-mono"
+        />
+      </Field>
 
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${id}-mode`}>Failure mode</Label>
-          <Select
-            id={`${id}-mode`}
-            value={mode}
-            onChange={(e) => setMode(e.target.value as FailureMode)}
-            aria-invalid={errors.fields.mode !== undefined}
-            aria-describedby={describedBy('mode')}
-          >
-            {failureModes.map((m) => (
-              <option key={m} value={m}>
-                {humanize(m)}
-              </option>
-            ))}
-          </Select>
-          <FieldError id={`${id}-mode-error`} message={errors.fields.mode} />
-        </div>
+      <Field id={`${id}-mode`} label="Failure mode" hint="Decides which metrics move and how fast." error={errors.fields.mode}>
+        <Select {...control('mode')} value={mode} onChange={(e) => setMode(e.target.value as FailureMode)}>
+          {failureModes.map((m) => (
+            <option key={m} value={m}>
+              {failureModeLabels[m]}
+            </option>
+          ))}
+        </Select>
+      </Field>
 
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${id}-severity`}>Severity</Label>
-          <Select
-            id={`${id}-severity`}
-            value={severity}
-            onChange={(e) => setSeverity(e.target.value as Severity)}
-            aria-invalid={errors.fields.severity !== undefined}
-            aria-describedby={describedBy('severity')}
-          >
+      <div className="grid grid-cols-2 gap-3">
+        <Field id={`${id}-severity`} label="Severity" hint="Sets how the incident is triaged." error={errors.fields.severity}>
+          <Select {...control('severity')} value={severity} onChange={(e) => setSeverity(e.target.value as Severity)}>
             {severities.map((s) => (
               <option key={s} value={s}>
-                {humanize(s)}
+                {severityLabels[s]}
               </option>
             ))}
           </Select>
-          <FieldError id={`${id}-severity-error`} message={errors.fields.severity} />
-        </div>
+        </Field>
 
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${id}-duration`}>Duration</Label>
+        <Field id={`${id}-duration`} label="Duration" hint="From 10s to 30m, like 90s or 2m." error={errors.fields.duration}>
           <Input
-            id={`${id}-duration`}
+            {...control('duration')}
             value={duration}
             onChange={(e) => setDuration(e.target.value)}
-            placeholder="2m"
+            placeholder="2m…"
             autoComplete="off"
             spellCheck={false}
-            aria-invalid={errors.fields.duration !== undefined}
-            aria-describedby={`${id}-duration-hint${errors.fields.duration === undefined ? '' : ` ${id}-duration-error`}`}
+            className="font-mono"
           />
-          <p id={`${id}-duration-hint`} className="text-xs text-muted-foreground">
-            From 10s to 30m, written like 90s or 2m.
-          </p>
-          <FieldError id={`${id}-duration-error`} message={errors.fields.duration} />
-        </div>
+        </Field>
       </div>
 
-      <div className="flex flex-col gap-1.5">
+      <div className="flex min-w-0 flex-col gap-1.5">
         <div className="flex items-baseline justify-between">
           <Label htmlFor={`${id}-intensity`}>Intensity</Label>
           <output htmlFor={`${id}-intensity`} className="font-mono text-sm tabular-nums">
@@ -155,35 +165,48 @@ export function InjectForm({ token, onInjected }: InjectFormProps) {
           </output>
         </div>
         <input
-          id={`${id}-intensity`}
+          {...control('intensity')}
           type="range"
           min={0}
           max={1}
           step={0.05}
           value={intensity}
           onChange={(e) => setIntensity(Number(e.target.value))}
-          className="h-10 w-full accent-primary"
+          className="h-8 w-full accent-foreground"
           aria-valuetext={`${Math.round(intensity * 100)} percent`}
-          aria-invalid={errors.fields.intensity !== undefined}
-          aria-describedby={describedBy('intensity')}
         />
-        <p className="text-xs text-muted-foreground">Low values are barely noticeable, and 100% is a total outage.</p>
-        <FieldError id={`${id}-intensity-error`} message={errors.fields.intensity} />
+        <p
+          id={`${id}-intensity-message`}
+          className={cn('min-h-8 text-xs leading-4', errors.fields.intensity === undefined ? 'text-muted-foreground' : 'text-bad')}
+        >
+          {errors.fields.intensity ?? 'Low values are barely noticeable, and 100% is a total outage.'}
+        </p>
       </div>
 
-      {errors.general.length > 0 ? (
-        <Alert tone="bad">
-          {errors.general.map((line) => (
-            <p key={line}>{line}</p>
-          ))}
-        </Alert>
-      ) : null}
-      {success !== null ? <Alert tone="ok">{success}</Alert> : null}
+      <Button type="submit" disabled={submitting || waitSeconds > 0}>
+        {submitting ? 'Injecting…' : waitSeconds > 0 ? `Try again in ${waitSeconds}s` : 'Inject failure'}
+      </Button>
 
-      <div>
-        <Button type="submit" disabled={submitting || waitSeconds > 0}>
-          {submitting ? 'Injecting' : waitSeconds > 0 ? `Try again in ${waitSeconds}s` : 'Inject failure'}
-        </Button>
+      {/* This area keeps its height whether or not it holds a message, so the page below the form never jumps. */}
+      <div aria-live="polite" className="min-h-16 text-sm">
+        {errors.general.length > 0 ? (
+          <div role="alert" className="flex items-start gap-2 text-bad">
+            <StatusGlyph tone="bad" className="mt-1.5" />
+            <div className="flex min-w-0 flex-col gap-1">
+              {errors.general.map((line) => (
+                <p key={line} className="break-words">
+                  {line}
+                </p>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {success !== null ? (
+          <p className="flex items-start gap-2 text-muted-foreground">
+            <StatusGlyph tone="ok" className="mt-1.5" />
+            <span className="min-w-0 break-words">{success} An incident is declared if it breaks its SLO.</span>
+          </p>
+        ) : null}
       </div>
     </form>
   )
