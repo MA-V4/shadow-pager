@@ -1,6 +1,6 @@
 import { BrowserRouter, Link, Route, Routes } from 'react-router-dom'
 
-import { Layout } from './components/Layout'
+import { Layout, PublicLayout } from './components/Layout'
 import { EmptyState } from './components/Notice'
 import { sortedPages, type PageModule } from './lib/routes'
 
@@ -22,13 +22,20 @@ function NotFound() {
 
 // APP
 
-// AppRoutes maps every URL to its page, inside the shared frame.
+// AppRoutes maps every URL to its page, inside the frame that the page asked for.
 export function AppRoutes() {
   const links = pages.map((page) => page.route).filter((route) => route.label !== undefined)
+  const appPages = pages.filter((page) => page.route.layout !== 'public')
+  const publicPages = pages.filter((page) => page.route.layout === 'public')
   return (
     <Routes>
+      <Route element={<PublicLayout />}>
+        {publicPages.map(({ route, default: Page }) => (
+          <Route key={route.path} path={route.path} element={<Page />} />
+        ))}
+      </Route>
       <Route element={<Layout links={links} />}>
-        {pages.map(({ route, default: Page }) => (
+        {appPages.map(({ route, default: Page }) => (
           <Route key={route.path} path={route.path} element={<Page />} />
         ))}
         <Route path="*" element={<NotFound />} />

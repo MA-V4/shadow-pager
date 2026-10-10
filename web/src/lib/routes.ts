@@ -10,6 +10,8 @@ export interface PageRoute {
   label?: string
   // Pages with a smaller number come first in the navigation.
   order?: number
+  // The frame around the page: the operator app by default, or the plain public frame with no controls.
+  layout?: 'app' | 'public'
 }
 
 // PageModule is the shape of a file in src/pages whose name ends in Page.tsx.
