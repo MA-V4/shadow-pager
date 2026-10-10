@@ -1,0 +1,113 @@
+@import 'tailwindcss';
+
+/* Dark mode is switched by a class on the html element, not by the system setting alone. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* LIGHT THEME */
+:root {
+  --background: #f6f7f9;
+  --foreground: #10131a;
+  --card: #ffffff;
+  --card-foreground: #10131a;
+  --muted: #eceef2;
+  --muted-foreground: #5b6474;
+  --border: #dde1e8;
+  --input: #cfd5df;
+  --ring: #f2555a;
+  --primary: #e23d43;
+  --primary-foreground: #ffffff;
+  --secondary: #e7eaf0;
+  --secondary-foreground: #10131a;
+  --destructive: #c62828;
+  --destructive-foreground: #ffffff;
+  --ok: #15803d;
+  --warn: #b45309;
+  --bad: #c62828;
+  --info: #1d4ed8;
+  --chart-line: #1d4ed8;
+  --chart-grid: #dde1e8;
+}
+
+/* DARK THEME */
+.dark {
+  --background: #0b0e14;
+  --foreground: #e6e9ef;
+  --card: #121722;
+  --card-foreground: #e6e9ef;
+  --muted: #1a2130;
+  --muted-foreground: #97a1b3;
+  --border: #242c3d;
+  --input: #2e384c;
+  --ring: #f2555a;
+  --primary: #f2555a;
+  --primary-foreground: #14060a;
+  --secondary: #1e2636;
+  --secondary-foreground: #e6e9ef;
+  --destructive: #ef5350;
+  --destructive-foreground: #14060a;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+  --bad: #f87171;
+  --info: #7aa7ff;
+  --chart-line: #7aa7ff;
+  --chart-grid: #242c3d;
+}
+
+/* These names turn the variables above into Tailwind colours such as bg-card and text-muted-foreground. */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-bad: var(--bad);
+  --color-info: var(--info);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html {
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Keyboard users always get a clear outline, on every control. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

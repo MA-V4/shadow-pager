@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Shadow-Pager: inject pretend infrastructure failures and practice incident response." />
+    <meta name="color-scheme" content="dark light" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Shadow-Pager</title>
+    <script>
+      // The theme is set before the page paints, so a light mode reader never sees a dark flash.
+      try {
+        if (localStorage.getItem('shadow-pager.theme') === 'light') {
+          document.documentElement.classList.remove('dark')
+        }
+      } catch (_) {
+        // Storage can be switched off, and then the dark default simply stays.
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
