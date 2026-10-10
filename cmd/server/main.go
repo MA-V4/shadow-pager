@@ -27,6 +27,7 @@ import (
 	"github.com/MA-V4/shadow-pager/internal/chaos"
 	"github.com/MA-V4/shadow-pager/internal/incident"
 	"github.com/MA-V4/shadow-pager/internal/slack"
+	"github.com/MA-V4/shadow-pager/internal/storage"
 )
 
 // version is stamped at build time:
@@ -58,6 +59,8 @@ type config struct {
 	SlackBotToken          string
 	SlackInviteUserIDs     []string
 	SlackAnnounceChannelID string
+
+	DatabaseURL string
 }
 
 // loadConfig is a pure function of its input, so it takes no context.
@@ -109,6 +112,8 @@ func loadConfig(getenv func(string) string) (config, error) {
 	if err := loadSlackConfig(getenv, &cfg); err != nil {
 		return config{}, err
 	}
+
+	cfg.DatabaseURL = strings.TrimSpace(getenv("DATABASE_URL"))
 
 	return cfg, nil
 }
@@ -183,6 +188,22 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 		return fmt.Errorf("build chaos engine: %w", err)
 	}
 
+	// Without a database the app still runs, and everything simply lives in memory.
+	var store *storage.Store
+	var restored []chaos.Simulation
+	var managerOpts []incident.Option
+	if cfg.DatabaseURL != "" {
+		store, restored, err = openStorage(ctx, logger, cfg.DatabaseURL, engine)
+		if err != nil {
+			return err
+		}
+		// This runs after everything else in this function, so the pool is closed last.
+		defer store.Close()
+		managerOpts = append(managerOpts, incident.WithStore(store))
+	} else {
+		logger.WarnContext(ctx, "storage is disabled because DATABASE_URL is not set, so nothing survives a restart")
+	}
+
 	// Without Slack tokens the app still runs, and incidents are simply not announced anywhere.
 	var notifier incident.Notifier = incident.NopNotifier{}
 	var slackClient *slack.Client
@@ -198,9 +219,31 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 		logger.WarnContext(ctx, "slack is disabled because SLACK_APP_TOKEN and SLACK_BOT_TOKEN are not set")
 	}
 
-	incidents, err := incident.NewManager(engine, notifier, logger)
+	incidents, err := incident.NewManager(engine, notifier, logger, managerOpts...)
 	if err != nil {
 		return fmt.Errorf("build incident manager: %w", err)
+	}
+
+	// The recorder listens from this moment on, so it also sees simulations injected right after startup.
+	recorderCtx, cancelRecorder := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancelRecorder()
+	recorderDone := make(chan struct{})
+	var dbPing func(context.Context) error
+	if store != nil {
+		if err := incidents.Restore(ctx, restored); err != nil {
+			return fmt.Errorf("restore incidents: %w", err)
+		}
+		recorder, err := storage.NewRecorder(recorderCtx, engine, store, logger)
+		if err != nil {
+			return fmt.Errorf("build recorder: %w", err)
+		}
+		go func() {
+			defer close(recorderDone)
+			recorder.Run()
+		}()
+		dbPing = store.Ping
+	} else {
+		close(recorderDone)
 	}
 	var listener *slack.Listener
 	if slackClient != nil {
@@ -216,7 +259,7 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 	defer cancelStreams()
 
 	srv := &http.Server{
-		Handler:           newRouter(logger, engine, api.NewHandler(engine, logger, streamCtx, api.WithIncidents(incidents)), &draining),
+		Handler:           newRouter(logger, engine, api.NewHandler(engine, logger, streamCtx, api.WithIncidents(incidents)), &draining, dbPing),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		// Streaming handlers (Phase 3) extend their own deadline through
@@ -279,7 +322,51 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 	}
 
 	return errors.Join(runErr, shutdown(ctx, logger, cfg, srv, &draining, cancelEngine, engineDone, engineStopped,
-		cancelIncidents, incidentsDone, incidentsStopped))
+		cancelIncidents, incidentsDone, incidentsStopped, cancelRecorder, recorderDone))
+}
+
+// storageStartupTimeout is how long connecting, migrating and restoring may take together.
+const storageStartupTimeout = 60 * time.Second
+
+// openStorage connects to the database, updates its tables, and puts saved simulations back into the engine.
+func openStorage(ctx context.Context, logger *slog.Logger, url string, engine *chaos.Engine) (*storage.Store, []chaos.Simulation, error) {
+	ctx, cancel := context.WithTimeout(ctx, storageStartupTimeout)
+	defer cancel()
+
+	store, err := storage.Open(ctx, url, logger)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open database: %w", err)
+	}
+	restored, err := restoreSimulations(ctx, store, engine)
+	if err != nil {
+		store.Close()
+		return nil, nil, err
+	}
+	return store, restored, nil
+}
+
+// restoreSimulations loads the simulations that were running and saves the ones that ended while the program was off.
+func restoreSimulations(ctx context.Context, store *storage.Store, engine *chaos.Engine) ([]chaos.Simulation, error) {
+	if err := store.Migrate(ctx); err != nil {
+		return nil, fmt.Errorf("prepare database: %w", err)
+	}
+	saved, err := store.LoadRunningSimulations(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load saved simulations: %w", err)
+	}
+	restored, err := engine.Restore(ctx, saved)
+	if err != nil {
+		return nil, fmt.Errorf("restore simulations: %w", err)
+	}
+	for _, sim := range restored {
+		if sim.State == chaos.StateRunning {
+			continue
+		}
+		if err := store.UpsertSimulation(ctx, sim); err != nil {
+			return nil, fmt.Errorf("save simulation that ended while the server was off: %w", err)
+		}
+	}
+	return restored, nil
 }
 
 // runIncidents runs the incident manager and the Slack listener side by side until both have stopped.
@@ -324,6 +411,8 @@ func shutdown(
 	cancelIncidents context.CancelFunc,
 	incidentsDone <-chan error,
 	incidentsStopped bool,
+	cancelRecorder context.CancelFunc,
+	recorderDone <-chan struct{},
 ) error {
 	draining.Store(true)
 
@@ -363,13 +452,24 @@ func shutdown(
 		}
 	}
 
+	// The recorder goes after that and writes what is still waiting, and the caller closes the pool at the very end.
+	cancelRecorder()
+	select {
+	case <-recorderDone:
+	case <-shutdownCtx.Done():
+		errs = append(errs, fmt.Errorf("recorder shutdown: %w", shutdownCtx.Err()))
+	}
+
 	logger.InfoContext(shutdownCtx, "shutdown complete")
 	return errors.Join(errs...)
 }
 
 // HTTP
 
-func newRouter(logger *slog.Logger, engine *chaos.Engine, apiHandler *api.Handler, draining *atomic.Bool) http.Handler {
+// readyzDatabaseTimeout is how long the database may take to answer the readiness check.
+const readyzDatabaseTimeout = 2 * time.Second
+
+func newRouter(logger *slog.Logger, engine *chaos.Engine, apiHandler *api.Handler, draining *atomic.Bool, dbPing func(context.Context) error) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
@@ -401,6 +501,18 @@ func newRouter(logger *slog.Logger, engine *chaos.Engine, apiHandler *api.Handle
 		if draining.Load() {
 			checks["lifecycle"] = "draining"
 			status = http.StatusServiceUnavailable
+		}
+		// The database is only asked when there is one, and it gets a short time to answer.
+		if dbPing != nil {
+			pingCtx, cancel := context.WithTimeout(r.Context(), readyzDatabaseTimeout)
+			err := dbPing(pingCtx)
+			cancel()
+			checks["database"] = "ok"
+			if err != nil {
+				checks["database"] = "unreachable"
+				status = http.StatusServiceUnavailable
+				logger.WarnContext(r.Context(), "readyz database check failed", slog.Any("error", err))
+			}
 		}
 
 		writeJSON(r.Context(), logger, w, status, map[string]any{"checks": checks})
