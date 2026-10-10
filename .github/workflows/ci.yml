@@ -13,6 +13,16 @@ jobs:
   test:
     name: Format, vet and test
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: shadowpager_test
+        ports:
+          - 5432:5432
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/shadowpager_test?sslmode=disable
     steps:
       - name: Check out code
         uses: actions/checkout@v4
@@ -37,6 +47,21 @@ jobs:
 
       - name: Vet
         run: go vet ./...
+
+      - name: Wait for Postgres
+        run: |
+          if ! command -v pg_isready > /dev/null; then
+            echo "pg_isready is not installed, so the tests rely on their own connect retry"
+            exit 0
+          fi
+          for attempt in $(seq 1 30); do
+            if pg_isready -h localhost -p 5432 -U postgres; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Postgres did not become ready in time"
+          exit 1
 
       - name: Test
         run: go test -race -count=1 ./...

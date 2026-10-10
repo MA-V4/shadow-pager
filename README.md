@@ -82,3 +82,43 @@ The bot scopes in the manifest are the smallest set that works:
 | `channels:join`   | Join the announce channel before posting there.               |
 | `chat:write`      | Post and update the incident card, timeline and replies.      |
 | `commands`        | Receive the `/shadowpager` slash command.                     |
+
+## Database setup
+
+Postgres is optional. With no `DATABASE_URL` the server logs one warning and keeps
+everything in memory, exactly as before. With it, simulations and incidents survive
+restarts, including a Render free tier spin-down, so the buttons on old Slack incident
+cards keep working.
+
+Set one variable, `DATABASE_URL`, and start the server. The tables are created and
+updated automatically at startup; look for `migration applied` in the logs.
+
+**Neon.** In the Neon console open **Connect**, switch **Connection pooling** on, and copy
+the connection string. The pooled host name contains `-pooler`. Keep `sslmode=require`.
+
+**Supabase.** Open **Connect** and copy the **Transaction pooler** string, which uses port
+`6543`. The direct connection on port `5432` only has an IPv6 address on the free tier,
+which Render cannot reach.
+
+Both poolers share one database connection between many clients, which breaks named
+prepared statements. The server therefore uses a pgx mode that never creates them, so
+the pooled strings above work as they are.
+
+What is stored: one row per simulation, one row per incident with its Slack channel and
+card message, and the incident timeline. Raw metric samples are never stored.
+
+When a database is configured, `/readyz` also pings it with a two second limit and
+reports `"database": "ok"` or `"unreachable"`. `/healthz` never touches the database.
+
+### Running the database tests
+
+The storage tests need a real Postgres and are skipped when `TEST_DATABASE_URL` is not
+set. With Docker:
+
+    docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17
+    export TEST_DATABASE_URL="postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+    go test -count=1 ./...
+
+`TEST_DATABASE_URL` must be written as a URL. Every test creates its own schema named
+`test_...` and drops it afterwards, so tests never see the rows of another test. Do not
+point it at a database you care about.

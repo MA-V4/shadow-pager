@@ -20,3 +20,6 @@ services:
         sync: false
       - key: SLACK_ANNOUNCE_CHANNEL_ID
         sync: false
+      # The database password is part of this URL, so it is typed into the Render dashboard too.
+      - key: DATABASE_URL
+        sync: false
