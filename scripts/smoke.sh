@@ -7,6 +7,7 @@
 #   ADMIN_TOKEN  the admin token of the server (optional, and never printed)
 #
 # Without WEB_ORIGIN the CORS check is skipped, and without ADMIN_TOKEN nothing is injected.
+# The script asks the server if public drills are on and expects the matching behaviour.
 # The script exits with 0 when every check passed and with 1 when at least one failed.
 
 set -u
@@ -128,6 +129,30 @@ else
   fail "the API answer is missing a security header (nosniff, frame options or content security policy)"
 fi
 
+# Browsers are told to insist on HTTPS, which the server only does in production and only matters over HTTPS.
+case "$API_URL" in
+  https://*)
+    if header Strict-Transport-Security | grep -q "max-age=31536000"; then
+      pass "the API sends Strict-Transport-Security for one year"
+    else
+      fail "the API does not send Strict-Transport-Security. Is APP_ENV set to production on the server?"
+    fi
+    ;;
+  *) skip "Strict-Transport-Security, because API_URL is not an https address" ;;
+esac
+
+# The server says if visitors may start drills, which changes what the checks below expect.
+public_drills=0
+code="$(request "$API/config")"
+if [ "$code" = "200" ] && body_has '"public_drills":true'; then
+  public_drills=1
+  pass "GET /api/v1/config is 200 and says public drills are on"
+elif [ "$code" = "200" ] && body_has '"public_drills":false'; then
+  pass "GET /api/v1/config is 200 and says public drills are off"
+else
+  fail "GET /api/v1/config gave $code, want 200 with public_drills"
+fi
+
 # CORS
 
 if [ -z "$WEB_ORIGIN" ]; then
@@ -176,6 +201,14 @@ else
       fail "GET /api/v1/simulations gave $code and does not list $id"
     fi
 
+    # A visitor must never be able to stop a drill that the admin started.
+    code="$(request --request POST "$API/simulations/$id/halt")"
+    if [ "$code" = "401" ]; then
+      pass "halting the admin drill without the token is refused"
+    else
+      fail "halting the admin drill without the token gave $code, want 401"
+    fi
+
     code="$(request --request POST "$API/simulations/$id/halt" --header "Authorization: Bearer $ADMIN_TOKEN")"
     state="$(json_string state)"
     if [ "$code" = "200" ] && [ "$state" = "halted" ]; then
@@ -191,14 +224,32 @@ else
     fail "POST /api/v1/simulations gave $code, want 201. Answer: $(head -c 300 "$BODY")"
   fi
 
-  # A request with no token must be refused, or the token protects nothing.
   code="$(request --request POST "$API/simulations" --header "Content-Type: application/json" --data "$drill")"
-  if [ "$code" = "401" ]; then
-    pass "a write without the admin token is refused"
+  id="$(json_string id)"
+  if [ "$public_drills" -eq 1 ]; then
+    # With public drills on, a visitor gets a drill of their own, marked public, and may stop it again.
+    if [ "$code" = "201" ] && body_has '"public":true'; then
+      pass "a write without the token starts a public drill"
+      code="$(request --request POST "$API/simulations/$id/halt")"
+      if [ "$code" = "200" ]; then
+        pass "the public drill can be halted without the token"
+      else
+        fail "halting the public drill without the token gave $code, want 200. It ends by itself after 10 seconds."
+      fi
+    elif [ "$code" = "429" ]; then
+      fail "the public drill was rate limited or the public limit is full (429). Wait $(header Retry-After) seconds and run again."
+    else
+      [ -n "$id" ] && request --request POST "$API/simulations/$id/halt" --header "Authorization: Bearer $ADMIN_TOKEN" >/dev/null
+      fail "a write without the token gave $code, want 201 with a public drill"
+    fi
   else
-    id="$(json_string id)"
-    [ -n "$id" ] && request --request POST "$API/simulations/$id/halt" >/dev/null
-    fail "a write without the admin token gave $code, want 401. Is ADMIN_TOKEN set on the server?"
+    # With public drills off, a request with no token must be refused, or the token protects nothing.
+    if [ "$code" = "401" ]; then
+      pass "a write without the admin token is refused"
+    else
+      [ -n "$id" ] && request --request POST "$API/simulations/$id/halt" >/dev/null
+      fail "a write without the admin token gave $code, want 401. Is ADMIN_TOKEN set on the server?"
+    fi
   fi
 fi
 
