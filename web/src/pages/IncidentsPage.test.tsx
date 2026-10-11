@@ -77,7 +77,8 @@ describe('IncidentsPage', () => {
     expect(first.querySelector('[data-shape="spike"]')).toBeTruthy()
     expect(within(first).getByText('Critical')).toBeTruthy()
     expect(within(first).getByText('Acknowledged')).toBeTruthy()
-    expect(first.textContent).toContain('open for ')
+    // The duration says in words what it measures.
+    expect(first.querySelector('[data-duration]')?.textContent).toMatch(/^open for \S/)
     // Rows are 44px tall and split by hairlines, with no card around them.
     expect(first.className).toContain('min-h-11')
 
@@ -85,7 +86,7 @@ describe('IncidentsPage', () => {
     const second = within(resolvedList).getByRole('link')
     expect(second.getAttribute('href')).toBe('/incidents/inc_closed')
     expect(within(second).getByText('Minor')).toBeTruthy()
-    expect(second.textContent).toContain('resolved after 5m')
+    expect(second.querySelector('[data-duration]')?.textContent).toBe('lasted 5m')
     // The section already says "Resolved", so the rows under it do not repeat the word.
     expect(within(second).queryByText('Resolved')).toBeNull()
 

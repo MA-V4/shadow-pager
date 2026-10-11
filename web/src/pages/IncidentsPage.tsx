@@ -26,7 +26,7 @@ function IncidentRow({ incident, now }: { incident: Incident; now: number }) {
     <li className="border-b border-subtle">
       <Link
         to={`/incidents/${encodeURIComponent(incident.id)}`}
-        className="grid min-h-11 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-2 py-2 transition-colors duration-150 ease-out hover:bg-raised lg:grid-cols-[8.5rem_minmax(0,1fr)_minmax(0,1.3fr)_auto_5.5rem_4.5rem] lg:py-0"
+        className="grid min-h-11 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-2 py-2 transition-colors duration-150 ease-out hover:bg-raised lg:grid-cols-[8.5rem_minmax(0,1fr)_minmax(0,1.3fr)_auto_8.5rem_4.5rem] lg:py-0"
       >
         <span className="truncate font-mono text-body text-primary" translate="no">
           {incident.id}
@@ -44,9 +44,9 @@ function IncidentRow({ incident, now }: { incident: Incident; now: number }) {
           {/* A row under "Resolved" does not repeat that word, and an open row says how far along it is. */}
           {open ? <IncidentStatusTag status={incident.status} /> : null}
         </span>
-        <span className="order-6 text-right font-mono text-meta text-secondary lg:order-0" title={open ? 'Open for' : 'Time to resolve'}>
-          <span className="sr-only">{open ? 'open for ' : 'resolved after '}</span>
-          {incidentDuration(incident, now)}
+        {/* The words say what the time means: how long it has been open, or how long it lasted. */}
+        <span data-duration="" className="order-6 text-right text-meta whitespace-nowrap text-tertiary lg:order-0">
+          {open ? 'open for' : 'lasted'} <span className="font-mono text-secondary">{incidentDuration(incident, now)}</span>
         </span>
         <time dateTime={incident.declared_at} title={formatDateTime(incident.declared_at)} className="order-2 text-right text-meta text-tertiary lg:order-0">
           {formatAgo(incident.declared_at, now)}
