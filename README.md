@@ -26,12 +26,6 @@ posts to Slack. A drill started with the admin token is an **admin drill**, whic
 runs the Slack side: a channel per incident, an incident card with buttons, and a
 timeline. The Slack workspace of the demo is private, so this recording shows it.
 
-## Screenshots
-
-| Incident detail | Incidents | Status page |
-|-----------------|-----------|-------------|
-| ![One incident with its readouts and its timeline](docs/images/incident-detail.png) | ![The incident list](docs/images/incidents.png) | ![The public status page](docs/images/status.png) |
-
 ## Architecture
 
 ```mermaid
