@@ -14,7 +14,7 @@ import (
 
 // SIMULATION HISTORY
 
-const simulationColumns = `id, service, mode, severity, intensity, duration_ns, state, started_at, ends_at, ended_at`
+const simulationColumns = `id, service, mode, severity, intensity, duration_ns, state, started_at, ends_at, ended_at, public`
 
 const selectRecentSimulations = `
 SELECT ` + simulationColumns + `
@@ -69,8 +69,9 @@ func scanSimulation(row pgx.Row) (chaos.Simulation, error) {
 		durationNS                         int64
 		startedAt, endsAt                  time.Time
 		endedAt                            *time.Time
+		public                             bool
 	)
-	if err := row.Scan(&id, &service, &mode, &severity, &intensity, &durationNS, &state, &startedAt, &endsAt, &endedAt); err != nil {
+	if err := row.Scan(&id, &service, &mode, &severity, &intensity, &durationNS, &state, &startedAt, &endsAt, &endedAt, &public); err != nil {
 		return chaos.Simulation{}, err
 	}
 	return chaos.Simulation{
@@ -81,6 +82,7 @@ func scanSimulation(row pgx.Row) (chaos.Simulation, error) {
 			Severity:  chaos.Severity(severity),
 			Intensity: intensity,
 			Duration:  time.Duration(durationNS),
+			Public:    public,
 		},
 		State:     chaos.State(state),
 		StartedAt: startedAt.UTC(),
@@ -92,7 +94,7 @@ func scanSimulation(row pgx.Row) (chaos.Simulation, error) {
 // INCIDENT HISTORY
 
 const incidentColumns = `id, simulation_id, service, mode, severity, status, breaches, declared_at,
-       acknowledged_at, acknowledged_by, mitigated_at, resolved_at, slack_channel_id, slack_card_ts`
+       acknowledged_at, acknowledged_by, mitigated_at, resolved_at, slack_channel_id, slack_card_ts, public`
 
 const selectRecentIncidents = `
 SELECT ` + incidentColumns + `
@@ -154,9 +156,10 @@ func scanIncident(row pgx.Row) (incident.Incident, error) {
 		breaches                                   []string
 		declaredAt                                 time.Time
 		acknowledgedAt, mitigatedAt, resolvedAt    *time.Time
+		public                                     bool
 	)
 	err := row.Scan(&id, &simID, &service, &mode, &severity, &status, &breaches, &declaredAt,
-		&acknowledgedAt, &acknowledgedBy, &mitigatedAt, &resolvedAt, &channelID, &cardTS)
+		&acknowledgedAt, &acknowledgedBy, &mitigatedAt, &resolvedAt, &channelID, &cardTS, &public)
 	if err != nil {
 		return incident.Incident{}, err
 	}
@@ -175,6 +178,7 @@ func scanIncident(row pgx.Row) (incident.Incident, error) {
 		ResolvedAt:     utcOrNil(resolvedAt),
 		ChannelID:      channelID,
 		CardTimestamp:  cardTS,
+		Public:         public,
 	}, nil
 }
 

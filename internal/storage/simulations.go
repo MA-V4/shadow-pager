@@ -12,8 +12,8 @@ import (
 
 // upsertSimulation saves a new simulation, or updates one that is still running and never one that is over.
 const upsertSimulation = `
-INSERT INTO simulations (id, service, mode, severity, intensity, duration_ns, state, started_at, ends_at, ended_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+INSERT INTO simulations (id, service, mode, severity, intensity, duration_ns, state, started_at, ends_at, ended_at, public, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
 ON CONFLICT (id) DO UPDATE
 SET state = EXCLUDED.state, ended_at = EXCLUDED.ended_at, updated_at = now()
 WHERE simulations.state = 'running'`
@@ -31,6 +31,7 @@ func (s *Store) UpsertSimulation(ctx context.Context, sim chaos.Simulation) erro
 		sim.StartedAt.UTC(),
 		sim.EndsAt.UTC(),
 		utcOrNil(sim.EndedAt),
+		sim.Scenario.Public,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert simulation %s: %w", sim.ID, err)
@@ -39,7 +40,7 @@ func (s *Store) UpsertSimulation(ctx context.Context, sim chaos.Simulation) erro
 }
 
 const selectRunningSimulations = `
-SELECT id, service, mode, severity, intensity, duration_ns, state, started_at, ends_at, ended_at
+SELECT ` + simulationColumns + `
 FROM simulations
 WHERE state = 'running'
 ORDER BY started_at, id`
@@ -54,30 +55,11 @@ func (s *Store) LoadRunningSimulations(ctx context.Context) ([]chaos.Simulation,
 
 	var out []chaos.Simulation
 	for rows.Next() {
-		var (
-			id, service, mode, severity, state string
-			intensity                          float64
-			durationNS                         int64
-			startedAt, endsAt                  time.Time
-			endedAt                            *time.Time
-		)
-		if err := rows.Scan(&id, &service, &mode, &severity, &intensity, &durationNS, &state, &startedAt, &endsAt, &endedAt); err != nil {
+		sim, err := scanSimulation(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan running simulation: %w", err)
 		}
-		out = append(out, chaos.Simulation{
-			ID: chaos.SimulationID(id),
-			Scenario: chaos.Scenario{
-				Service:   service,
-				Mode:      chaos.FailureMode(mode),
-				Severity:  chaos.Severity(severity),
-				Intensity: intensity,
-				Duration:  time.Duration(durationNS),
-			},
-			State:     chaos.State(state),
-			StartedAt: startedAt.UTC(),
-			EndsAt:    endsAt.UTC(),
-			EndedAt:   utcOrNil(endedAt),
-		})
+		out = append(out, sim)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read running simulations: %w", err)

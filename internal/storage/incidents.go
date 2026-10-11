@@ -19,9 +19,9 @@ var _ incident.Store = (*Store)(nil)
 const upsertIncident = `
 INSERT INTO incidents (
     id, simulation_id, service, mode, severity, status, breaches, declared_at,
-    acknowledged_at, acknowledged_by, mitigated_at, resolved_at, slack_channel_id, slack_card_ts, updated_at
+    acknowledged_at, acknowledged_by, mitigated_at, resolved_at, slack_channel_id, slack_card_ts, public, updated_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now())
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now())
 ON CONFLICT (id) DO UPDATE
 SET status = EXCLUDED.status,
     acknowledged_at = EXCLUDED.acknowledged_at,
@@ -71,6 +71,7 @@ func (s *Store) SaveIncident(ctx context.Context, inc incident.Incident) error {
 		utcOrNil(inc.ResolvedAt),
 		inc.ChannelID,
 		inc.CardTimestamp,
+		inc.Public,
 	)
 	if err != nil {
 		return fmt.Errorf("save incident %s: upsert incident: %w", inc.ID, err)
