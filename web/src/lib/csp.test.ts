@@ -109,6 +109,11 @@ describe('vercel.json', () => {
     expect(header('X-Frame-Options')).toBe('DENY')
   })
 
+  it('tells browsers to insist on HTTPS for one year, on every subdomain too', () => {
+    // One year is 31,536,000 seconds.
+    expect(header('Strict-Transport-Security')).toBe('max-age=31536000; includeSubDomains')
+  })
+
   it('blocks framing in a header, because a policy inside the page is not allowed to', () => {
     const policy = header('Content-Security-Policy') ?? ''
     expect(directive(policy, 'frame-ancestors')).toBe("frame-ancestors 'none'")
