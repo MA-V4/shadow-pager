@@ -6,7 +6,8 @@ services:
     # The build prints its Go version first, so the deploy log shows which toolchain compiled the binary.
     buildCommand: go version && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/server ./cmd/server
     startCommand: ./bin/server
-    healthCheckPath: /readyz
+    # The probe only asks if the process is up, so a database blip can never make Render restart the instance.
+    healthCheckPath: /healthz
     envVars:
       # Render always installs the newest Go, so this forces the toolchain that go.mod pins, and a test keeps the two equal.
       - key: GOTOOLCHAIN
@@ -46,6 +47,6 @@ services:
         value: "100"
       - key: STREAM_MAX_PER_IP
         value: "5"
-      # Render puts one proxy in front of the service, so the last forwarded address is the caller.
+      # This assumes one proxy adds an address in front of the service, which docs/deploy.md explains how to check.
       - key: TRUSTED_PROXY_HOPS
         value: "1"
