@@ -96,6 +96,15 @@ Application
   address no longer leaks into an error.
 - New endpoint `GET /api/v1/config`, and a `public` field on simulations and incidents.
 
+Polish
+
+- Render's health check calls `/healthz`, so a database blip cannot restart the instance.
+- The SLO label of a chart always stays inside the plot, clear of the time axis.
+- Sparklines of healthy metrics use their own range and line up across a card.
+- The status page says "Simulated services" above its overall state, and the incident list
+  says what its duration means.
+- The README is cut down to a 30 second read, and the guides moved to `docs/`.
+
 Repository
 
 - Every GitHub Action pinned to a full commit, Dependabot for Go, npm and Actions.

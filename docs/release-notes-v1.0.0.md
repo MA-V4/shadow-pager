@@ -38,8 +38,8 @@ public status page.
     go run ./cmd/server
     cd web && npm install && npm run dev
 
-No Slack workspace and no database are needed to try it. The README has the full deploy
-guide for Neon, Render and Vercel.
+No Slack workspace and no database are needed to try it. `docs/deploy.md` has the full
+deploy guide for Neon, Render and Vercel.
 
 ## Known limits
 
