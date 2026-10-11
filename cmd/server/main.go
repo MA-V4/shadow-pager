@@ -554,6 +554,8 @@ func newRouter(logger *slog.Logger, engine *chaos.Engine, apiHandler *api.Handle
 	r.Use(middleware.RealIP)
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
+	// The security headers go on before CORS, so even a refused preflight carries them.
+	r.Use(api.SecurityHeaders)
 	r.Use(api.CORS(corsOrigins))
 
 	started := time.Now()
