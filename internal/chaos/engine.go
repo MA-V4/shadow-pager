@@ -20,8 +20,10 @@ var (
 	ErrInvalidScenario = errors.New("invalid scenario")
 	ErrNotFound        = errors.New("simulation not found")
 	ErrCapacity        = errors.New("active simulation limit reached")
-	ErrAlreadyRunning  = errors.New("engine already running")
-	ErrNotActive       = errors.New("simulation is not active")
+	// ErrPublicCapacity is also an ErrCapacity, so callers that only know the general one still treat it right.
+	ErrPublicCapacity = fmt.Errorf("public drill limit reached: %w", ErrCapacity)
+	ErrAlreadyRunning = errors.New("engine already running")
+	ErrNotActive      = errors.New("simulation is not active")
 )
 
 // DOMAIN TYPES
@@ -86,6 +88,7 @@ type Scenario struct {
 	Severity  Severity      `json:"severity"`
 	Intensity float64       `json:"intensity"` // 0 is a tiny problem and 1 is everything broken
 	Duration  time.Duration `json:"duration"`
+	Public    bool          `json:"public"` // true when a visitor without the admin token started it
 }
 
 const (
@@ -141,6 +144,7 @@ type Generator interface {
 type Config struct {
 	TickInterval     time.Duration // how often simulations take a step
 	MaxActive        int           // how many simulations can run at the same time
+	MaxPublicActive  int           // how many of those may be public drills, where zero means no extra limit
 	SubscriberBuffer int           // how many samples can wait in line for each listener
 }
 
@@ -312,14 +316,22 @@ func (e *Engine) Inject(ctx context.Context, sc Scenario) (Simulation, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	activeCount := 0
+	activeCount, publicCount := 0, 0
 	for _, s := range e.sims {
-		if s.State == StateRunning {
-			activeCount++
+		if s.State != StateRunning {
+			continue
+		}
+		activeCount++
+		if s.Scenario.Public {
+			publicCount++
 		}
 	}
 	if activeCount >= e.cfg.MaxActive {
 		return Simulation{}, fmt.Errorf("inject: %w (%d)", ErrCapacity, e.cfg.MaxActive)
+	}
+	// Public drills have a smaller limit of their own, so visitors can never use up every slot.
+	if sc.Public && e.cfg.MaxPublicActive > 0 && publicCount >= e.cfg.MaxPublicActive {
+		return Simulation{}, fmt.Errorf("inject: %w (%d)", ErrPublicCapacity, e.cfg.MaxPublicActive)
 	}
 	e.sims[id] = sim
 	e.emitLocked(ctx, Event{Type: EventSimulationStarted, Simulation: *sim})
@@ -329,6 +341,7 @@ func (e *Engine) Inject(ctx context.Context, sc Scenario) (Simulation, error) {
 		slog.String("target_service", sc.Service),
 		slog.String("mode", string(sc.Mode)),
 		slog.String("severity", string(sc.Severity)),
+		slog.Bool("public", sc.Public),
 	)
 	return *sim, nil
 }
