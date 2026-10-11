@@ -55,7 +55,8 @@ func open(ctx context.Context, url string, logger *slog.Logger, retry retryPolic
 
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
-		return nil, fmt.Errorf("parse database url: %w", err)
+		// The parser's own message can repeat the address with its password, so it is dropped on purpose.
+		return nil, fmt.Errorf("parse database url: %w", ErrInvalidURL)
 	}
 	cfg.MaxConns = maxConns
 	cfg.MinConns = 0
