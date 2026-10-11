@@ -51,12 +51,12 @@ func TestLoadConfigProtection(t *testing.T) {
 		{
 			name: "everything set",
 			env: map[string]string{
-				"ADMIN_TOKEN":          " hunter2secret ",
+				"ADMIN_TOKEN":          " hunter2secret-that-is-long-enough-0123 ",
 				"RATE_LIMIT_BURST":     "2",
 				"RATE_LIMIT_REFILL":    "1m",
 				"CORS_ALLOWED_ORIGINS": "https://a.example, http://localhost:5173 ,,",
 			},
-			wantToken:   "hunter2secret",
+			wantToken:   "hunter2secret-that-is-long-enough-0123",
 			wantBurst:   2,
 			wantRefill:  time.Minute,
 			wantOrigins: "https://a.example|http://localhost:5173",
@@ -94,11 +94,11 @@ func TestLoadConfigProtection(t *testing.T) {
 
 func TestRunProtectsWrites(t *testing.T) {
 	s := startServer(t, map[string]string{
-		"ADMIN_TOKEN":       "hunter2secret",
+		"ADMIN_TOKEN":       "hunter2secret-that-is-long-enough-0123",
 		"RATE_LIMIT_BURST":  "3",
 		"RATE_LIMIT_REFILL": "1h",
 	})
-	auth := map[string]string{"Authorization": "Bearer hunter2secret"}
+	auth := map[string]string{"Authorization": "Bearer hunter2secret-that-is-long-enough-0123"}
 
 	// Reading is open to everyone, with or without the token.
 	for _, path := range []string{"/simulations", "/incidents", "/status", "/slo"} {
@@ -141,7 +141,7 @@ func TestRunProtectsWrites(t *testing.T) {
 
 	s.stop()
 	for _, m := range s.logs.messages() {
-		if strings.Contains(m, "hunter2secret") {
+		if strings.Contains(m, "hunter2secret-that-is-long-enough-0123") {
 			t.Errorf("log line %q repeats the admin token", m)
 		}
 	}

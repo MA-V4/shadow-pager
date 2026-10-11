@@ -3,10 +3,15 @@ services:
     name: shadow-pager-api
     runtime: go
     plan: free
-    buildCommand: CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/server ./cmd/server
+    # The build prints its Go version first, so the deploy log shows which toolchain compiled the binary.
+    buildCommand: go version && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/server ./cmd/server
     startCommand: ./bin/server
     healthCheckPath: /readyz
     envVars:
+      # Render always installs the newest Go, so this forces the toolchain that go.mod pins, and a test keeps the two equal.
+      - key: GOTOOLCHAIN
+        value: go1.26.9+auto
+      # Production switches on the TLS check for the database and the Strict-Transport-Security header.
       - key: APP_ENV
         value: production
       - key: LOG_LEVEL
@@ -32,3 +37,15 @@ services:
         value: "5"
       - key: RATE_LIMIT_REFILL
         value: 30s
+      # Visitors may start drills without the token, and those drills never post to Slack.
+      - key: PUBLIC_DRILLS
+        value: "true"
+      - key: PUBLIC_MAX_ACTIVE
+        value: "5"
+      - key: STREAM_MAX_TOTAL
+        value: "100"
+      - key: STREAM_MAX_PER_IP
+        value: "5"
+      # Render puts one proxy in front of the service, so the last forwarded address is the caller.
+      - key: TRUSTED_PROXY_HOPS
+        value: "1"

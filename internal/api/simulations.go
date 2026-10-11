@@ -51,6 +51,7 @@ type simulationResponse struct {
 	StartedAt time.Time  `json:"started_at"`
 	EndsAt    time.Time  `json:"ends_at"`
 	EndedAt   *time.Time `json:"ended_at,omitempty"` // left out until the simulation ends
+	Public    bool       `json:"public"`             // true when a visitor without the admin token started it
 }
 
 // newSimulationResponse copies an engine simulation into the shape we send back.
@@ -66,6 +67,7 @@ func newSimulationResponse(sim chaos.Simulation) simulationResponse {
 		StartedAt: sim.StartedAt,
 		EndsAt:    sim.EndsAt,
 		EndedAt:   sim.EndedAt,
+		Public:    sim.Scenario.Public,
 	}
 }
 
@@ -109,6 +111,8 @@ func (h *Handler) createSimulation(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, err)
 		return
 	}
+	// What a visitor starts is a public drill, which has its own limit and never reaches Slack.
+	sc.Public = isVisitor(r)
 	sim, err := h.sim.Inject(r.Context(), sc)
 	if err != nil {
 		h.writeError(w, r, err)
@@ -155,7 +159,20 @@ func (h *Handler) getSimulation(w http.ResponseWriter, r *http.Request) {
 
 // haltSimulation stops the simulation named in the URL before its time is up.
 func (h *Handler) haltSimulation(w http.ResponseWriter, r *http.Request) {
-	sim, err := h.sim.Halt(r.Context(), chaos.SimulationID(chi.URLParam(r, "id")))
+	id := chaos.SimulationID(chi.URLParam(r, "id"))
+	// A visitor may only stop what visitors started, so a drill of the admin needs the admin token.
+	if isVisitor(r) {
+		current, err := h.sim.Get(r.Context(), id)
+		if err != nil {
+			h.writeError(w, r, err)
+			return
+		}
+		if !current.Scenario.Public {
+			h.refuseToken(w, r, "this drill was started with the admin token, so halting it needs the admin token too")
+			return
+		}
+	}
+	sim, err := h.sim.Halt(r.Context(), id)
 	if err != nil {
 		h.writeError(w, r, err)
 		return

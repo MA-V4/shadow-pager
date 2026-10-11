@@ -51,7 +51,7 @@ func TestSecurityHeadersOnEveryKindOfAnswer(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { tt.write(w) }))
+			handler := SecurityHeaders(false)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { tt.write(w) }))
 			rec := httptest.NewRecorder()
 
 			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/status", nil))
@@ -66,7 +66,7 @@ func TestSecurityHeadersOnEveryKindOfAnswer(t *testing.T) {
 
 func TestSecurityHeadersPolicyAllowsNothing(t *testing.T) {
 	rec := httptest.NewRecorder()
-	SecurityHeaders(http.NotFoundHandler()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	SecurityHeaders(false)(http.NotFoundHandler()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 
 	policy := rec.Header().Get("Content-Security-Policy")
 	for _, directive := range []string{"default-src 'none'", "frame-ancestors 'none'"} {
@@ -83,7 +83,7 @@ func TestSecurityHeadersPolicyAllowsNothing(t *testing.T) {
 
 func TestSecurityHeadersKeepCORSAnswers(t *testing.T) {
 	reached := 0
-	handler := SecurityHeaders(corsHandler(&reached))
+	handler := SecurityHeaders(false)(corsHandler(&reached))
 
 	// A refused preflight never reaches the real handler, and it still has to carry the headers.
 	refused := httptest.NewRecorder()
@@ -103,7 +103,7 @@ func TestSecurityHeadersKeepCORSAnswers(t *testing.T) {
 
 func TestSecurityHeadersDoNotWrapTheWriter(t *testing.T) {
 	var seen http.ResponseWriter
-	handler := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := SecurityHeaders(false)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		seen = w
 		// A live stream sets its own type and flushes, and both must still work behind the middleware.
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -125,4 +125,23 @@ func TestSecurityHeadersDoNotWrapTheWriter(t *testing.T) {
 		t.Errorf("Content-Type = %q, want the stream to keep its own type", got)
 	}
 	checkSecurityHeaders(t, rec.Header())
+}
+
+func TestStrictTransportSecurityOnlyInProduction(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+
+	off := httptest.NewRecorder()
+	SecurityHeaders(false)(next).ServeHTTP(off, httptest.NewRequest(http.MethodGet, "/", nil))
+	if got := off.Header().Get("Strict-Transport-Security"); got != "" {
+		t.Errorf("Strict-Transport-Security = %q outside production, want none, because local servers speak plain HTTP", got)
+	}
+	checkSecurityHeaders(t, off.Header())
+
+	on := httptest.NewRecorder()
+	SecurityHeaders(true)(next).ServeHTTP(on, httptest.NewRequest(http.MethodGet, "/", nil))
+	// One year is 31,536,000 seconds.
+	if got, want := on.Header().Get("Strict-Transport-Security"), "max-age=31536000; includeSubDomains"; got != want {
+		t.Errorf("Strict-Transport-Security = %q in production, want %q", got, want)
+	}
+	checkSecurityHeaders(t, on.Header())
 }

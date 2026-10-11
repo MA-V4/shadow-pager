@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"fmt"
@@ -33,26 +34,41 @@ type WriteProtection struct {
 	PerClient  limiter // turns for each caller, named by IP address, or nil for no limit
 	Global     limiter // turns shared by all callers together, or nil for no limit
 	AdminToken string  // when set, callers must send it as a bearer token
+	// PublicDrills lets callers without the admin token start drills, which are then marked as public.
+	PublicDrills bool
 }
 
 // WithWriteProtection puts a rate limit and an optional admin token in front of every request that changes something.
 func WithWriteProtection(p WriteProtection) Option {
 	return func(h *Handler) {
+		h.publicDrills = p.PublicDrills
 		// The order matters: a flood is stopped first, then strangers, and only real work uses up the shared turns.
 		if p.PerClient != nil {
-			h.writeGuards = append(h.writeGuards, h.limitWrites(p.PerClient, clientKey))
+			h.writeGuards = append(h.writeGuards, h.limitRequests(p.PerClient, clientKey, "write request rate limited"))
 		}
-		if p.AdminToken != "" {
+		switch {
+		case p.PublicDrills:
+			h.writeGuards = append(h.writeGuards, h.identifyCaller(p.AdminToken))
+		case p.AdminToken != "":
 			h.writeGuards = append(h.writeGuards, h.requireAdminToken(p.AdminToken))
 		}
 		if p.Global != nil {
-			h.writeGuards = append(h.writeGuards, h.limitWrites(p.Global, func(*http.Request) string { return globalKey }))
+			h.writeGuards = append(h.writeGuards, h.limitRequests(p.Global, func(*http.Request) string { return globalKey }, "write request rate limited"))
 		}
 	}
 }
 
-// limitWrites lets a request through when its caller still has a turn, and says when to come back otherwise.
-func (h *Handler) limitWrites(l limiter, key func(*http.Request) string) func(http.Handler) http.Handler {
+// WithReadLimit gives every caller a generous number of reads, so one scraper cannot wear the server out.
+func WithReadLimit(l limiter) Option {
+	return func(h *Handler) {
+		if l != nil {
+			h.readGuard = h.limitRequests(l, clientKey, "read request rate limited")
+		}
+	}
+}
+
+// limitRequests lets a request through when its caller still has a turn, and says when to come back otherwise.
+func (h *Handler) limitRequests(l limiter, key func(*http.Request) string, logMessage string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ok, retryAfter := l.Allow(key(r))
@@ -63,7 +79,7 @@ func (h *Handler) limitWrites(l limiter, key func(*http.Request) string) func(ht
 
 			// Retry-After counts whole seconds, so we round up and never say zero.
 			seconds := max(1, int(math.Ceil(retryAfter.Seconds())))
-			h.log.WarnContext(r.Context(), "write request rate limited",
+			h.log.WarnContext(r.Context(), logMessage,
 				slog.String("request_id", middleware.GetReqID(r.Context())),
 				slog.String("client", key(r)),
 				slog.Int("retry_after_seconds", seconds),
@@ -76,22 +92,84 @@ func (h *Handler) limitWrites(l limiter, key func(*http.Request) string) func(ht
 	}
 }
 
-// requireAdminToken only lets a request through when it carries the right bearer token.
-func (h *Handler) requireAdminToken(token string) func(http.Handler) http.Handler {
-	want := sha256.Sum256([]byte(token))
+// onlyReads applies a guard to requests that only look, and lets every other request pass it by.
+func onlyReads(guard func(http.Handler) http.Handler) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
+		guarded := guard(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Both sides are hashed first, so comparing takes the same time whatever the caller sent.
-			got := sha256.Sum256([]byte(bearerToken(r)))
-			if subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
-				w.Header().Set("WWW-Authenticate", `Bearer realm="shadow-pager"`)
-				h.writeJSON(w, r, http.StatusUnauthorized, errorResponse{Error: "a valid admin token is required for this request"})
+			if r.Method == http.MethodGet || r.Method == http.MethodHead {
+				guarded.ServeHTTP(w, r)
 				return
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
 }
+
+// ADMIN TOKEN
+
+// tokenMatcher gives back a function that checks a token in the same time whatever the caller sent.
+func tokenMatcher(token string) func(candidate string) bool {
+	want := sha256.Sum256([]byte(token))
+	return func(candidate string) bool {
+		// Both sides are hashed first, so comparing takes the same time whatever the caller sent.
+		got := sha256.Sum256([]byte(candidate))
+		return subtle.ConstantTimeCompare(got[:], want[:]) == 1
+	}
+}
+
+// refuseToken answers a request whose admin token is missing or wrong, and never repeats what was sent.
+func (h *Handler) refuseToken(w http.ResponseWriter, r *http.Request, message string) {
+	w.Header().Set("WWW-Authenticate", `Bearer realm="shadow-pager"`)
+	h.writeJSON(w, r, http.StatusUnauthorized, errorResponse{Error: message})
+}
+
+// requireAdminToken only lets a request through when it carries the right bearer token.
+func (h *Handler) requireAdminToken(token string) func(http.Handler) http.Handler {
+	matches := tokenMatcher(token)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !matches(bearerToken(r)) {
+				h.refuseToken(w, r, "a valid admin token is required for this request")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// PUBLIC DRILLS
+
+// callerKey is the context key under which a request remembers that its caller is a visitor.
+type callerKey struct{}
+
+// identifyCaller lets visitors through as visitors, lets the admin through as the admin, and refuses a wrong token.
+func (h *Handler) identifyCaller(token string) func(http.Handler) http.Handler {
+	matches := tokenMatcher(token)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			sent := bearerToken(r)
+			switch {
+			case sent == "":
+				// No token at all is a visitor, and what a visitor starts is a public drill.
+				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, true)))
+			case token != "" && matches(sent):
+				next.ServeHTTP(w, r)
+			default:
+				// A wrong token is refused instead of being treated as a visitor, so a typo never goes unnoticed.
+				h.refuseToken(w, r, "the admin token is not valid, so send the right one or none at all")
+			}
+		})
+	}
+}
+
+// isVisitor tells us if the caller of this request came in without the admin token while public drills are on.
+func isVisitor(r *http.Request) bool {
+	visitor, _ := r.Context().Value(callerKey{}).(bool)
+	return visitor
+}
+
+// HELPERS
 
 // bearerToken pulls the token out of the Authorization header, or gives back nothing when there is none.
 func bearerToken(r *http.Request) string {

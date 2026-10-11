@@ -44,6 +44,10 @@ type Handler struct {
 
 	writeGuards []func(http.Handler) http.Handler // every request that changes something passes through these first
 	extraRoutes []func(chi.Router)                // routes that options bring along
+
+	readGuard    func(http.Handler) http.Handler // every request that only looks passes through this first, when it is set
+	streams      *streamGate                     // counts the open live streams, or nil for no limit
+	publicDrills bool                            // true when visitors without the admin token may start drills
 }
 
 // NewHandler builds a Handler from the things it needs to do its job.
@@ -64,6 +68,11 @@ func NewHandler(sim simulator, logger *slog.Logger, shutdownCtx context.Context,
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
 
+	// Reads get their own generous limit, which is apart from the stricter one for writes.
+	if h.readGuard != nil {
+		r.Use(onlyReads(h.readGuard))
+	}
+
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		h.writeJSON(w, r, http.StatusNotFound, errorResponse{Error: "route not found"})
 	})
@@ -78,6 +87,7 @@ func (h *Handler) Routes() chi.Router {
 	r.Get("/simulations/{id}", h.getSimulation)
 	write.Post("/simulations/{id}/halt", h.haltSimulation)
 	r.Get("/stream", h.streamMetrics)
+	r.Get("/config", h.getConfig)
 
 	// The incident routes only exist when someone gave us a place to read incidents from.
 	if h.incidents != nil {
@@ -91,6 +101,18 @@ func (h *Handler) Routes() chi.Router {
 	}
 
 	return r
+}
+
+// CONFIG
+
+// configResponse tells the web app the few things about this server that change what it shows.
+type configResponse struct {
+	PublicDrills bool `json:"public_drills"`
+}
+
+// getConfig says whether visitors may start drills without the admin token.
+func (h *Handler) getConfig(w http.ResponseWriter, r *http.Request) {
+	h.writeJSON(w, r, http.StatusOK, configResponse{PublicDrills: h.publicDrills})
 }
 
 // RESPONSES

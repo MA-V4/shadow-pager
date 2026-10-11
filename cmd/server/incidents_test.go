@@ -25,6 +25,7 @@ type logLine struct {
 type logRecorder struct {
 	mu    sync.Mutex
 	all   []logLine
+	text  []byte // every byte that was logged, for tests that search the whole log for secrets
 	lines chan logLine
 }
 
@@ -33,6 +34,10 @@ func newLogRecorder() *logRecorder {
 }
 
 func (r *logRecorder) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	r.text = append(r.text, p...)
+	r.mu.Unlock()
+
 	var line logLine
 	if err := json.Unmarshal(p, &line); err == nil {
 		r.mu.Lock()
@@ -60,6 +65,13 @@ func (r *logRecorder) waitFor(t *testing.T, msg string) logLine {
 			t.Fatalf("timed out waiting for the log line %q", msg)
 		}
 	}
+}
+
+// raw gives back everything that was logged so far, exactly as it was written.
+func (r *logRecorder) raw() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return string(r.text)
 }
 
 // messages gives back every log message written so far, in order.

@@ -14,11 +14,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -68,7 +70,19 @@ type config struct {
 	RateLimitBurst     int
 	RateLimitRefill    time.Duration
 	CORSAllowedOrigins []string
+
+	PublicDrills     bool
+	PublicMaxActive  int
+	StreamMaxTotal   int
+	StreamMaxPerIP   int
+	TrustedProxyHops int
 }
+
+// envProduction is the APP_ENV value that switches on the checks a public server needs.
+const envProduction = "production"
+
+// production tells us if this process runs where strangers can reach it.
+func (c config) production() bool { return c.Env == envProduction }
 
 // loadConfig is a pure function of its input, so it takes no context.
 // Injecting getenv instead of calling os.Getenv keeps it trivially testable.
@@ -121,12 +135,34 @@ func loadConfig(getenv func(string) string) (config, error) {
 	}
 
 	cfg.DatabaseURL = strings.TrimSpace(getenv("DATABASE_URL"))
+	if err := checkDatabaseTransport(cfg); err != nil {
+		return config{}, err
+	}
 
 	if err := loadProtectionConfig(getenv, &cfg); err != nil {
 		return config{}, err
 	}
+	if err := loadLimitsConfig(getenv, &cfg); err != nil {
+		return config{}, err
+	}
 
 	return cfg, nil
+}
+
+// errDatabaseConfig means the database address is not safe to use where this process runs.
+var errDatabaseConfig = errors.New("invalid database config")
+
+// checkDatabaseTransport refuses a production database that could be reached without encryption.
+func checkDatabaseTransport(cfg config) error {
+	if !cfg.production() || cfg.DatabaseURL == "" || storage.EncryptedTransport(cfg.DatabaseURL) {
+		return nil
+	}
+	// The message names the mode and never the address, because the address holds the password.
+	mode := storage.SSLMode(cfg.DatabaseURL)
+	if mode == "" {
+		mode = "not set"
+	}
+	return fmt.Errorf("%w: in production DATABASE_URL must have sslmode require, verify-ca or verify-full, and it is %s", errDatabaseConfig, mode)
 }
 
 // errProtectionConfig means a rate limit setting cannot be used.
@@ -137,11 +173,24 @@ const (
 	defaultRateLimitRefill = 30 * time.Second // how long a caller waits to earn one more
 	globalRateLimitBurst   = 20               // how many injects or halts all callers together may do in one go
 	globalRateLimitRefill  = 15 * time.Second // how long everyone waits together to earn one more
+
+	minAdminTokenLength = 32 // a shorter admin token is too easy to guess
+
+	readRateLimitBurst  = 120                    // how many reads one caller may do in one go, which is plenty for a few open tabs
+	readRateLimitRefill = 250 * time.Millisecond // how long a caller waits to earn one more read
+
+	defaultPublicMaxActive = 5   // how many public drills may run at the same time
+	defaultStreamMaxTotal  = 100 // how many live streams may be open for all callers together
+	defaultStreamMaxPerIP  = 5   // how many live streams one caller may hold open
 )
 
 // loadProtectionConfig reads the admin token, the rate limit and the list of websites that may call the API.
 func loadProtectionConfig(getenv func(string) string, cfg *config) error {
 	cfg.AdminToken = strings.TrimSpace(getenv("ADMIN_TOKEN"))
+	// The message gives the lengths and never the token or any part of it.
+	if n := utf8.RuneCountInString(cfg.AdminToken); n > 0 && n < minAdminTokenLength {
+		return fmt.Errorf("%w: ADMIN_TOKEN must be at least %d characters long, and it has %d", errProtectionConfig, minAdminTokenLength, n)
+	}
 	cfg.RateLimitBurst = defaultRateLimitBurst
 	cfg.RateLimitRefill = defaultRateLimitRefill
 
@@ -163,6 +212,55 @@ func loadProtectionConfig(getenv func(string) string, cfg *config) error {
 		if origin = strings.TrimSpace(origin); origin != "" {
 			cfg.CORSAllowedOrigins = append(cfg.CORSAllowedOrigins, origin)
 		}
+	}
+	return nil
+}
+
+// errLimitsConfig means a setting for public drills, streams or proxies cannot be used.
+var errLimitsConfig = errors.New("invalid limits config")
+
+// loadLimitsConfig reads the settings for public drills, open streams and the proxies in front of the server.
+func loadLimitsConfig(getenv func(string) string, cfg *config) error {
+	cfg.PublicMaxActive = defaultPublicMaxActive
+	cfg.StreamMaxTotal = defaultStreamMaxTotal
+	cfg.StreamMaxPerIP = defaultStreamMaxPerIP
+
+	if raw := strings.TrimSpace(getenv("PUBLIC_DRILLS")); raw != "" {
+		v, err := strconv.ParseBool(raw)
+		if err != nil {
+			return fmt.Errorf("%w: PUBLIC_DRILLS must be true or false", errLimitsConfig)
+		}
+		cfg.PublicDrills = v
+	}
+
+	numbers := []struct {
+		key string
+		dst *int
+		min int
+	}{
+		{"PUBLIC_MAX_ACTIVE", &cfg.PublicMaxActive, 1},
+		{"STREAM_MAX_TOTAL", &cfg.StreamMaxTotal, 1},
+		{"STREAM_MAX_PER_IP", &cfg.StreamMaxPerIP, 1},
+		{"TRUSTED_PROXY_HOPS", &cfg.TrustedProxyHops, 0},
+	}
+	for _, n := range numbers {
+		raw := strings.TrimSpace(getenv(n.key))
+		if raw == "" {
+			continue
+		}
+		v, err := strconv.Atoi(raw)
+		if err != nil || v < n.min {
+			return fmt.Errorf("%w: %s must be a whole number of at least %d", errLimitsConfig, n.key, n.min)
+		}
+		*n.dst = v
+	}
+
+	// Visitors must never be able to fill every slot, so at least one is always kept for the admin.
+	if cfg.PublicDrills && cfg.PublicMaxActive >= cfg.MaxActiveSims {
+		return fmt.Errorf("%w: PUBLIC_MAX_ACTIVE (%d) must be smaller than CHAOS_MAX_ACTIVE (%d)", errLimitsConfig, cfg.PublicMaxActive, cfg.MaxActiveSims)
+	}
+	if cfg.StreamMaxPerIP > cfg.StreamMaxTotal {
+		return fmt.Errorf("%w: STREAM_MAX_PER_IP (%d) must not be larger than STREAM_MAX_TOTAL (%d)", errLimitsConfig, cfg.StreamMaxPerIP, cfg.StreamMaxTotal)
 	}
 	return nil
 }
@@ -228,11 +326,14 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 	})).
 		With(slog.String("service", "shadow-pager"), slog.String("version", version), slog.String("env", cfg.Env))
 	slog.SetDefault(logger)
+	// The Go version is logged so a deploy can be checked against the toolchain pinned in go.mod.
+	logger.InfoContext(ctx, "starting", slog.String("go_version", runtime.Version()))
 
-	engine, err := chaos.NewEngine(chaos.Config{
-		TickInterval: cfg.TickInterval,
-		MaxActive:    cfg.MaxActiveSims,
-	}, logger, chaos.WithDefaultGenerators())
+	engineCfg := chaos.Config{TickInterval: cfg.TickInterval, MaxActive: cfg.MaxActiveSims}
+	if cfg.PublicDrills {
+		engineCfg.MaxPublicActive = cfg.PublicMaxActive
+	}
+	engine, err := chaos.NewEngine(engineCfg, logger, chaos.WithDefaultGenerators())
 	if err != nil {
 		return fmt.Errorf("build chaos engine: %w", err)
 	}
@@ -315,10 +416,13 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 		api.WithStatus(statusBoard),
 		api.WithSLO(chaos.DefaultSLO),
 		api.WithWriteProtection(api.WriteProtection{
-			PerClient:  ratelimit.New(cfg.RateLimitBurst, cfg.RateLimitRefill),
-			Global:     ratelimit.New(globalRateLimitBurst, globalRateLimitRefill),
-			AdminToken: cfg.AdminToken,
+			PerClient:    ratelimit.New(cfg.RateLimitBurst, cfg.RateLimitRefill),
+			Global:       ratelimit.New(globalRateLimitBurst, globalRateLimitRefill),
+			AdminToken:   cfg.AdminToken,
+			PublicDrills: cfg.PublicDrills,
 		}),
+		api.WithReadLimit(ratelimit.New(readRateLimitBurst, readRateLimitRefill)),
+		api.WithStreamLimits(api.StreamLimits{MaxTotal: cfg.StreamMaxTotal, MaxPerIP: cfg.StreamMaxPerIP}),
 	}
 	if store != nil {
 		// History comes after the incidents option, because it wraps what that option set up.
@@ -329,6 +433,11 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 		slog.Int("rate_limit_burst", cfg.RateLimitBurst),
 		slog.Duration("rate_limit_refill", cfg.RateLimitRefill),
 		slog.Int("cors_allowed_origins", len(cfg.CORSAllowedOrigins)),
+		slog.Bool("public_drills", cfg.PublicDrills),
+		slog.Int("public_max_active", engineCfg.MaxPublicActive),
+		slog.Int("stream_max_total", cfg.StreamMaxTotal),
+		slog.Int("stream_max_per_ip", cfg.StreamMaxPerIP),
+		slog.Int("trusted_proxy_hops", cfg.TrustedProxyHops),
 	)
 
 	// draining flips to true the moment shutdown begins, so /readyz starts
@@ -340,7 +449,7 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 	defer cancelStreams()
 
 	srv := &http.Server{
-		Handler:           newRouter(logger, engine, api.NewHandler(engine, logger, streamCtx, apiOpts...), &draining, db, cfg.CORSAllowedOrigins),
+		Handler:           newRouter(logger, engine, api.NewHandler(engine, logger, streamCtx, apiOpts...), &draining, db, cfg),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		// Streaming handlers (Phase 3) extend their own deadline through
@@ -414,10 +523,13 @@ func openStorage(ctx context.Context, logger *slog.Logger, url string, engine *c
 	ctx, cancel := context.WithTimeout(ctx, storageStartupTimeout)
 	defer cancel()
 
+	// Only the host and the database name are ever written down, because the rest of the address is secret.
+	host, database := storage.Target(url)
 	store, err := storage.Open(ctx, url, logger)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open database: %w", err)
+		return nil, nil, fmt.Errorf("open database %s on %s: %w", database, host, err)
 	}
+	logger.InfoContext(ctx, "database connected", slog.String("database_host", host), slog.String("database_name", database))
 	restored, err := restoreSimulations(ctx, store, engine)
 	if err != nil {
 		store.Close()
@@ -547,16 +659,17 @@ func shutdown(
 
 // HTTP
 
-func newRouter(logger *slog.Logger, engine *chaos.Engine, apiHandler *api.Handler, draining *atomic.Bool, db *pingCache, corsOrigins []string) http.Handler {
+func newRouter(logger *slog.Logger, engine *chaos.Engine, apiHandler *api.Handler, draining *atomic.Bool, db *pingCache, cfg config) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
+	// The caller's address is only read from proxy headers for as many proxies as we were told to trust.
+	r.Use(api.ClientIP(cfg.TrustedProxyHops))
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
 	// The security headers go on before CORS, so even a refused preflight carries them.
-	r.Use(api.SecurityHeaders)
-	r.Use(api.CORS(corsOrigins))
+	r.Use(api.SecurityHeaders(cfg.production()))
+	r.Use(api.CORS(cfg.CORSAllowedOrigins))
 
 	started := time.Now()
 

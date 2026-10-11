@@ -52,6 +52,7 @@ type incidentResponse struct {
 	TimeToAcknowledge string                  `json:"time_to_acknowledge,omitempty"` // written like "1m30s"
 	TimeToResolve     string                  `json:"time_to_resolve,omitempty"`     // written like "5m0s"
 	SlackChannelID    string                  `json:"slack_channel_id,omitempty"`
+	Public            bool                    `json:"public"` // true when the drill behind it was started by a visitor
 	Timeline          []timelineEntryResponse `json:"timeline"`
 }
 
@@ -79,6 +80,7 @@ func newIncidentResponse(inc incident.Incident) incidentResponse {
 		MitigatedAt:    inc.MitigatedAt,
 		ResolvedAt:     inc.ResolvedAt,
 		SlackChannelID: inc.ChannelID,
+		Public:         inc.Public,
 		Timeline:       timeline,
 	}
 	if d, ok := inc.TimeToAcknowledge(); ok {

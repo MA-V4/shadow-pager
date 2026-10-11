@@ -64,6 +64,24 @@ const heartbeatInterval = 15 * time.Second
 
 // streamMetrics keeps the connection open and sends every new sample as it happens.
 func (h *Handler) streamMetrics(w http.ResponseWriter, r *http.Request) {
+	// A stream holds a connection open for a long time, so only a limited number may be open at once.
+	if h.streams != nil {
+		leave, ok := h.streams.enter(clientKey(r))
+		if !ok {
+			h.log.WarnContext(r.Context(), "stream refused because every slot is taken",
+				slog.String("request_id", middleware.GetReqID(r.Context())),
+				slog.String("client", clientKey(r)),
+			)
+			w.Header().Set("Retry-After", retryAfterHeader(streamRetryAfter))
+			h.writeJSON(w, r, http.StatusTooManyRequests, errorResponse{
+				Error: fmt.Sprintf("too many open streams, try again in %d seconds", streamRetryAfter),
+			})
+			return
+		}
+		// The slot is handed back however the stream ends: the caller leaves, the server stops, or the code panics.
+		defer leave()
+	}
+
 	// This context ends when the caller leaves or when the server starts to turn off.
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
