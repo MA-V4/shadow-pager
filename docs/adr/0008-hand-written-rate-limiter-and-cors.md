@@ -17,7 +17,7 @@ Both are written in the project, with the standard library only.
 - `internal/api/guard.go` applies three checks to a write, in this order: the bucket of
   the caller's IP address (IPv6 by /64), the optional admin token compared in constant
   time, and a bucket shared by all callers. A refused request gets 429 with `Retry-After`.
-  Reads are never limited.
+  Reads have a separate and much larger bucket per caller, and the health probes have none.
 - `internal/api/cors.go` allows only the origins in `CORS_ALLOWED_ORIGINS`, answers a
   preflight from any other origin with 403, never allows credentials, and does not wrap
   the response writer.
@@ -27,9 +27,12 @@ Both are written in the project, with the standard library only.
 - No new dependency, and each piece is about a hundred lines with its own tests and
   benchmark.
 - Memory is bounded even when a caller invents a new address for every request.
-- The caller's IP comes from chi's `RealIP` middleware, which trusts proxy headers. A
-  caller can lie about them, so the per caller limit is a courtesy and the shared bucket
-  is the real limit.
+- The caller's IP is read by `internal/api/clientip.go`, also written by hand. It takes
+  the address from `X-Forwarded-For` only for as many proxies as `TRUSTED_PROXY_HOPS`
+  says, counted from the right, and ignores the header otherwise. chi's `RealIP` was
+  used at first and was replaced, because it believes whatever a caller sends. If the
+  number of proxies is set wrong, the per caller limits get weaker, and the bucket shared
+  by all callers is still the backstop.
 - The limiter lives in the memory of one process. With more than one instance each would
   count on its own. The project runs one instance.
 - The code has to be maintained here. It covers what this API needs and nothing more.
