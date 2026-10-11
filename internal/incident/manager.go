@@ -475,6 +475,10 @@ func (m *Manager) List(ctx context.Context) ([]Incident, error) {
 
 // enqueue puts a message in line for the notifier and never waits.
 func (m *Manager) enqueue(ctx context.Context, job notification) {
+	// An incident from a public drill stays out of Slack, and this is the one door every message goes through.
+	if job.inc.Public {
+		return
+	}
 	select {
 	case m.jobs <- job:
 	default:

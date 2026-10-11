@@ -83,6 +83,7 @@ type Incident struct {
 	Timeline       []TimelineEntry
 	ChannelID      string // the Slack channel for this incident, empty when there is none
 	CardTimestamp  string // the Slack message that shows the incident card, empty when there is none
+	Public         bool   // true when the drill behind it was started by a visitor, so Slack is never told
 }
 
 // New starts an incident for a simulation that broke its limits.
@@ -96,6 +97,7 @@ func New(id IncidentID, sim chaos.Simulation, breaches []string, at time.Time) I
 		Status:       StatusDeclared,
 		Breaches:     slices.Clone(breaches),
 		DeclaredAt:   at,
+		Public:       sim.Scenario.Public,
 	}
 	inc.AddEntry(at, ActorSystem, "Incident declared")
 	return inc
