@@ -66,6 +66,47 @@ jobs:
       - name: Test
         run: go test -race -count=1 ./...
 
+  vulncheck:
+    name: Go vulnerability scan
+    runs-on: ubuntu-latest
+    # The scan reports but does not block yet, because the pinned versions in go.mod have known findings.
+    continue-on-error: true
+    steps:
+      # The action checks the code out itself and only reports problems in code that this program really calls.
+      - name: Run govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          # The newest Go is used here, so the report is about our code and modules and not about an old toolchain.
+          go-version-input: stable
+          go-package: ./...
+
+  bench:
+    name: Benchmarks
+    # Benchmark numbers are only kept for main, where they show how the code changes over time.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run benchmarks
+        run: |
+          set -o pipefail
+          go test -run '^$' -bench . -benchmem ./... | tee benchmarks.txt
+
+      - name: Upload benchmark output
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-benchmarks
+          path: benchmarks.txt
+          retention-days: 90
+
   web:
     name: Web typecheck, lint, test and build
     runs-on: ubuntu-latest
@@ -85,6 +126,10 @@ jobs:
 
       - name: Install packages
         run: npm ci
+
+      # Known problems of high or critical severity in any package stop the build.
+      - name: Audit packages
+        run: npm audit --audit-level=high
 
       - name: Typecheck
         run: npm run typecheck
