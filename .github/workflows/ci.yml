@@ -25,13 +25,22 @@ jobs:
       TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/shadowpager_test?sslmode=disable
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # The toolchain line in go.mod is the one place that says which Go compiles this project.
+      - name: Read the Go toolchain from go.mod
+        id: toolchain
+        run: echo "version=$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
-          go-version-file: go.mod
+          go-version: ${{ steps.toolchain.outputs.version }}
           cache: true
+
+      # A build with any other Go would not be the build that was scanned for known problems.
+      - name: Check the Go toolchain
+        run: test "$(go env GOVERSION)" = "go${{ steps.toolchain.outputs.version }}"
 
       - name: Download modules
         run: go mod download
@@ -69,16 +78,21 @@ jobs:
   vulncheck:
     name: Go vulnerability scan
     runs-on: ubuntu-latest
-    # The scan reports but does not block yet, because the pinned versions in go.mod have known findings.
-    continue-on-error: true
     steps:
-      # The action checks the code out itself and only reports problems in code that this program really calls.
+      - name: Check out code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Read the Go toolchain from go.mod
+        id: toolchain
+        run: echo "version=$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)" >> "$GITHUB_OUTPUT"
+
+      # The scan only reports problems in code that this program really calls, and any finding fails the build.
       - name: Run govulncheck
-        uses: golang/govulncheck-action@v1
+        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
         with:
-          # The newest Go is used here, so the report is about our code and modules and not about an old toolchain.
-          go-version-input: stable
+          go-version-input: ${{ steps.toolchain.outputs.version }}
           go-package: ./...
+          repo-checkout: false
 
   bench:
     name: Benchmarks
@@ -87,13 +101,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # The toolchain line in go.mod is the one place that says which Go compiles this project.
+      - name: Read the Go toolchain from go.mod
+        id: toolchain
+        run: echo "version=$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
-          go-version-file: go.mod
+          go-version: ${{ steps.toolchain.outputs.version }}
           cache: true
+
+      # A build with any other Go would not be the build that was scanned for known problems.
+      - name: Check the Go toolchain
+        run: test "$(go env GOVERSION)" = "go${{ steps.toolchain.outputs.version }}"
 
       - name: Run benchmarks
         run: |
@@ -101,7 +124,7 @@ jobs:
           go test -run '^$' -bench . -benchmem ./... | tee benchmarks.txt
 
       - name: Upload benchmark output
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: go-benchmarks
           path: benchmarks.txt
@@ -115,10 +138,10 @@ jobs:
         working-directory: web
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: lts/*
           cache: npm
