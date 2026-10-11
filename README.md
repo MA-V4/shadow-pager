@@ -6,7 +6,7 @@ Inject a fake infrastructure failure, watch an incident run its course in Slack,
 
 ## Live demo
 
-These are placeholders until the project is deployed.
+The links are placeholders until the project is deployed.
 
 | What        | Link                                              |
 |-------------|---------------------------------------------------|
@@ -15,6 +15,22 @@ These are placeholders until the project is deployed.
 | API         | `https://<your-api>.onrender.com/api/v1/status`   |
 
 The API runs on a free plan that sleeps when idle, so the first load can take up to a minute.
+
+The demo has two kinds of drills.
+
+- **Public drills.** Anyone can start a drill from the dashboard without a token. It
+  shows up on the dashboard and the status page, and it declares an incident like any
+  other. It is tagged "public drill" and it never posts to Slack. At most five public
+  drills run at once, each caller may start five in a row and then one every 30 seconds,
+  and a visitor can halt public drills only.
+- **Admin drills.** A drill started with the admin token (entered under the settings icon
+  in the header) also runs the Slack side: a channel per incident, an incident card with
+  buttons, and a timeline. This is what the recording below shows, because the Slack
+  workspace of the demo is private.
+
+![An admin drill running through its incident lifecycle in Slack](docs/images/slack-demo.gif)
+
+The recording is a placeholder and is not in the repository yet.
 
 ## Screenshots
 
@@ -62,7 +78,7 @@ flowchart LR
     AGG ==>|status snapshot| API
     API ==>|status and incidents| STATUS
     API ==>|incidents| WEB
-    MANAGER ==>|declared, status changed| SLACK
+    MANAGER ==>|declared, status changed, admin drills only| SLACK
     SLACK ==>|channel, card, timeline| SLACKAPP
     SLACKAPP ==>|buttons and /shadowpager| SLACK
     SLACK ==>|acknowledge, mitigate, resolve| MANAGER
@@ -84,7 +100,8 @@ declares incidents.
    drill: p99 latency, error rate, CPU and memory. Each failure mode is a table row of
    impact and curve shape, not separate code.
 3. **Declare.** The first sample that breaks an SLO declares an incident. With Slack
-   switched on, a channel is created and an incident card is posted.
+   switched on, and for a drill that is not public, a channel is created and an incident
+   card is posted.
 4. **Respond.** The buttons on the card move the incident forward: acknowledge, mitigate
    (which halts the drill), resolve. Statuses only move forward.
 5. **Observe.** Samples stream to the dashboard over Server-Sent Events, and the public
@@ -110,20 +127,21 @@ that was rejected.
 Where things live:
 
     cmd/server          configuration, wiring, health probes, graceful shutdown
+    internal/api        HTTP handlers, SSE stream, CORS, security headers, limits, public drills
     internal/chaos      simulation engine, failure shapes, metric generators
     internal/incident   incident lifecycle and its notification and save queues
-    internal/slack      Socket Mode listener, Block Kit card, slash command
-    internal/storage    Postgres pool, migrations, repositories, recorder
-    internal/api        HTTP handlers, SSE stream, CORS, security headers, write protection
-    internal/status     per service status for the public page
     internal/ratelimit  token bucket per caller
+    internal/slack      Socket Mode listener, Block Kit card, slash command
+    internal/status     per service status for the public page
+    internal/storage    Postgres pool, migrations, repositories, recorder
     web                 the web app (Vite, React, TypeScript, Tailwind)
     docs/adr            the decision records
     scripts             the smoke test for a deployed stack
 
 ## Running locally
 
-Requires Go 1.22 or newer. Slack and Postgres are not needed.
+Requires Go 1.25 or newer. `go.mod` pins the toolchain to Go 1.26.9, and an older Go
+downloads that toolchain by itself on the first build. Slack and Postgres are not needed.
 
     cp .env.example .env              # optional, the defaults work as they are
     set -a; source .env; set +a       # the binary reads real environment variables
@@ -150,38 +168,85 @@ Stop the server with Ctrl+C and watch the shutdown sequence in the logs.
 
 ### Endpoints
 
-| Path                              | Purpose                                                    |
-|-----------------------------------|------------------------------------------------------------|
-| `GET /healthz`                    | Liveness. The process is up. Never checks dependencies.    |
-| `GET /readyz`                     | Readiness. Engine ticking, not draining, database reachable. |
-| `GET /api/v1/simulations`         | List simulations, newest first.                            |
-| `POST /api/v1/simulations`        | Start a drill.                                             |
-| `GET /api/v1/simulations/{id}`    | One simulation.                                            |
-| `POST /api/v1/simulations/{id}/halt` | Stop a running drill.                                   |
-| `GET /api/v1/stream`              | Live metric samples as Server-Sent Events.                 |
-| `GET /api/v1/incidents`           | List incidents, newest first.                              |
-| `GET /api/v1/incidents/{id}`      | One incident with its timeline.                            |
-| `GET /api/v1/status`              | Public status of every service.                            |
-| `GET /api/v1/slo`                 | The SLO limits that count as a breach.                     |
+| Path                                 | Purpose                                                    |
+|--------------------------------------|------------------------------------------------------------|
+| `GET /healthz`                       | Liveness. The process is up. Never checks dependencies, never rate limited. |
+| `GET /readyz`                        | Readiness. 200 when the engine ticks, the server is not draining and the last database ping worked. 503 otherwise. Never rate limited. |
+| `GET /api/v1/simulations`            | List simulations, newest first. `?limit=` defaults to 50 and is capped at 200. |
+| `POST /api/v1/simulations`           | Start a drill.                                             |
+| `GET /api/v1/simulations/{id}`       | One simulation.                                            |
+| `POST /api/v1/simulations/{id}/halt` | Stop a running drill.                                      |
+| `GET /api/v1/stream`                 | Live metric samples as Server-Sent Events. `?simulation_id=` keeps one simulation. |
+| `GET /api/v1/incidents`              | List incidents, newest first, with the same `?limit=`.     |
+| `GET /api/v1/incidents/{id}`         | One incident with its timeline.                            |
+| `GET /api/v1/status`                 | Public status of every service.                            |
+| `GET /api/v1/slo`                    | The SLO limits that count as a breach.                     |
+| `GET /api/v1/config`                 | Whether public drills are on.                              |
+
+Every error has the body `{"error": "message"}`. A request over a limit gets `429` with a
+`Retry-After` header.
+
+### Environment variables
+
+The server reads every setting from the environment. All of them are optional.
+
+| Variable                    | Default       | Meaning |
+|-----------------------------|---------------|---------|
+| `HOST`                      | empty         | Address to listen on. Empty means every network. Use `127.0.0.1` locally. |
+| `PORT`                      | `8080`        | Port to listen on. Render sets it. |
+| `APP_ENV`                   | `development` | `production` switches on the TLS check for the database and the HSTS header. |
+| `LOG_LEVEL`                 | `info`        | `debug`, `info`, `warn` or `error`. |
+| `SHUTDOWN_TIMEOUT`          | `20s`         | How long a graceful shutdown may take. |
+| `CHAOS_TICK_INTERVAL`       | `1s`          | How often the engine makes samples. |
+| `CHAOS_MAX_ACTIVE`          | `10`          | How many drills may run at once. |
+| `DATABASE_URL`              | empty         | Postgres connection string. Empty keeps everything in memory. Secret. |
+| `ADMIN_TOKEN`               | empty         | Bearer token for writes, at least 32 characters. Secret. |
+| `RATE_LIMIT_BURST`          | `5`           | Writes one caller may do in a row. |
+| `RATE_LIMIT_REFILL`         | `30s`         | How long a caller waits to earn one more write. |
+| `CORS_ALLOWED_ORIGINS`      | empty         | Comma separated websites that may call the API from a browser. |
+| `PUBLIC_DRILLS`             | `false`       | `true` lets visitors start drills without the token. |
+| `PUBLIC_MAX_ACTIVE`         | `5`           | How many public drills may run at once. Must be smaller than `CHAOS_MAX_ACTIVE`. |
+| `STREAM_MAX_TOTAL`          | `100`         | How many live streams may be open in total. |
+| `STREAM_MAX_PER_IP`         | `5`           | How many live streams one caller may hold open. |
+| `TRUSTED_PROXY_HOPS`        | `0`           | How many proxies in front of the server may report the caller's address. `1` on Render. |
+| `SLACK_APP_TOKEN`           | empty         | Slack app-level token, starts with `xapp-`. Secret. |
+| `SLACK_BOT_TOKEN`           | empty         | Slack bot token, starts with `xoxb-`. Secret. |
+| `SLACK_INVITE_USER_IDS`     | empty         | Comma separated Slack member IDs to invite into incident channels. |
+| `SLACK_ANNOUNCE_CHANNEL_ID` | empty         | Slack channel ID where new incidents are announced. |
+
+Two more are read outside the server: `TEST_DATABASE_URL` by the storage tests, and
+`VITE_API_URL` by the web build. `render.yaml` also sets `GOTOOLCHAIN` for the build.
 
 ### API protection
 
-The API is meant to be shown in public, so the endpoints that change something are guarded.
+The API is meant to be shown in public, so it is guarded in layers.
 
-- **Rate limit.** Injecting and halting are limited per caller IP address with a token
-  bucket: `RATE_LIMIT_BURST` requests in a row (default 5), then one more every
-  `RATE_LIMIT_REFILL` (default 30s). A limited request gets `429` with a `Retry-After`
-  header. A second, shared bucket caps what all callers can do together. Slack users get
-  the same limit on `/shadowpager inject` and `/shadowpager halt`.
+- **Write limit.** Injecting and halting are limited per caller IP address with a token
+  bucket: `RATE_LIMIT_BURST` requests in a row, then one more every `RATE_LIMIT_REFILL`.
+  A second, shared bucket caps what all callers can do together. Slack users get the same
+  limit on `/shadowpager inject` and `/shadowpager halt`.
+- **Read limit.** Reads have their own, generous bucket per caller: 120 in a row, then
+  four per second. It is separate from the write limit. The health probes are exempt.
+- **Stream limit.** At most `STREAM_MAX_TOTAL` live streams are open at once, and at most
+  `STREAM_MAX_PER_IP` per caller. A slot is handed back when its stream ends for any reason.
 - **Admin token.** When `ADMIN_TOKEN` is set, injecting and halting need the header
-  `Authorization: Bearer <token>`. When it is not set they stay open, but rate limited.
-  Reading is always open.
-- **CORS.** Only the websites listed in `CORS_ALLOWED_ORIGINS` (comma separated) may call
-  the API from a browser.
+  `Authorization: Bearer <token>`. The token must be at least 32 characters, or the server
+  refuses to start. When no token is set, writes stay open but rate limited.
+- **Public drills.** With `PUBLIC_DRILLS=true`, a request without a token is let through
+  as a visitor. Its drill is marked public, counts against `PUBLIC_MAX_ACTIVE`, and never
+  reaches Slack. A visitor can only halt public drills. A wrong token is refused with 401.
+- **Caller address.** Limits are keyed by IP address. The address comes from the
+  `X-Forwarded-For` header only for as many proxies as `TRUSTED_PROXY_HOPS` says, counted
+  from the right, so a caller cannot invent one. With `0` the header is ignored.
+- **CORS.** Only the websites listed in `CORS_ALLOWED_ORIGINS` may call the API from a
+  browser.
 - **Security headers.** Every API answer carries `X-Content-Type-Options: nosniff`,
   `X-Frame-Options: DENY`, a `Referrer-Policy` and a `Content-Security-Policy` that loads
-  nothing. The web app sends the same headers from `web/vercel.json`, and its build writes
-  a policy into the page that allows only its own files and the API address it was built with.
+  nothing. In production it also carries `Strict-Transport-Security` for one year. The web
+  app sends the same headers from `web/vercel.json`, and its build writes a policy into
+  the page that allows only its own files and the API address it was built with.
+- **Secrets in logs.** Tokens and the `Authorization` header are never logged. Of the
+  database address only the host and the database name are logged.
 
 ### Slack setup
 
@@ -216,6 +281,9 @@ move the incident along: **Acknowledge**, **Mitigate (halt simulation)**, **Reso
 A simulation that ends by itself marks the incident as mitigated, and a person still
 has to resolve it.
 
+A drill started from Slack or with the admin token posts to Slack. A public drill never
+does, whatever it breaks.
+
 The bot scopes in the manifest are the smallest set that works:
 
 | Scope             | Why it is needed                                              |
@@ -238,8 +306,11 @@ updated automatically at startup; look for `migration applied` in the logs.
 the connection string. The pooled host name contains `-pooler`. Keep `sslmode=require`.
 
 **Supabase.** Open **Connect** and copy the **Transaction pooler** string, which uses port
-`6543`. The direct connection on port `5432` only has an IPv6 address on the free tier,
-which Render cannot reach.
+`6543`, and add `?sslmode=require` if it is not there. The direct connection on port
+`5432` only has an IPv6 address on the free tier, which Render cannot reach.
+
+With `APP_ENV=production` the server refuses to start unless `DATABASE_URL` has
+`sslmode=require`, `verify-ca` or `verify-full`. A missing sslmode is refused too.
 
 Both poolers share one database connection between many clients, which breaks named
 prepared statements. The server therefore uses a pgx mode that never creates them, so
@@ -249,8 +320,9 @@ What is stored: one row per simulation, one row per incident with its Slack chan
 card message, and the incident timeline. Raw metric samples are never stored.
 
 When a database is configured, `/readyz` also reports `"database": "ok"` or
-`"unreachable"` from a ping that is remembered for 60 seconds. `/healthz` never touches
-the database.
+`"unreachable"`. The probe never waits for the database: it reads the answer of the last
+ping, and when that answer is older than 60 seconds it starts a new ping in the
+background. `/healthz` never touches the database.
 
 ## Deploying
 
@@ -261,7 +333,7 @@ web app. Do the steps in this order, because each one needs an address from the 
 
 1. Create a project in the Neon console.
 2. Open **Connect**, switch **Connection pooling** on, and copy the connection string.
-   This is your `DATABASE_URL`.
+   This is your `DATABASE_URL`. It must contain `sslmode=require`.
 
 ### 2. Render (API)
 
@@ -272,17 +344,31 @@ web app. Do the steps in this order, because each one needs an address from the 
 | Variable                    | Value                                                              |
 |-----------------------------|--------------------------------------------------------------------|
 | `DATABASE_URL`              | The pooled Neon connection string from step 1.                     |
-| `ADMIN_TOKEN`               | A long random text. Leave empty to keep writes open.               |
+| `ADMIN_TOKEN`               | A random text of at least 32 characters, for example from `openssl rand -hex 32`. |
 | `CORS_ALLOWED_ORIGINS`      | Your Vercel address from step 3, for example `https://shadow-pager.vercel.app`. Set it after step 3. |
 | `SLACK_APP_TOKEN`           | Optional. The `xapp-` token from "Slack setup".                    |
 | `SLACK_BOT_TOKEN`           | Optional. The `xoxb-` token from "Slack setup".                    |
 | `SLACK_INVITE_USER_IDS`     | Optional. Comma separated Slack member IDs.                        |
 | `SLACK_ANNOUNCE_CHANNEL_ID` | Optional. A public Slack channel ID.                               |
 
-   `APP_ENV`, `LOG_LEVEL`, `RATE_LIMIT_BURST` and `RATE_LIMIT_REFILL` already have values
-   in `render.yaml`. `PORT` is set by Render itself. `HOST` must stay unset on Render.
+   The other variables already have values in `render.yaml`: `APP_ENV=production`,
+   `PUBLIC_DRILLS=true`, the limits, `TRUSTED_PROXY_HOPS=1` and `GOTOOLCHAIN`. `PORT` is
+   set by Render itself. `HOST` must stay unset on Render.
 3. Wait for the first deploy and note the service address, for example
    `https://shadow-pager-api.onrender.com`. Check it with `/healthz` and `/readyz`.
+
+Render's native Go runtime always installs the newest stable Go and has no setting to pin
+one. `render.yaml` therefore sets `GOTOOLCHAIN` to the version pinned in `go.mod`, which
+makes the Go command download and use exactly that toolchain. The build prints
+`go version` first, and the server logs `go_version` in its first line, so both logs show
+which Go built and runs the binary.
+
+The free Render instance sleeps after 15 minutes without inbound HTTP traffic and loses
+what it held in memory, which is why the database matters. Slack slash commands and
+buttons do not wake it, because Socket Mode is a connection that the server opens to
+Slack, not a request that Slack sends to the server. While the instance sleeps, that
+connection is gone and Slack has nowhere to deliver `/shadowpager`. Opening the web app
+or calling `/healthz` wakes the instance, and it then reconnects to Slack.
 
 ### 3. Vercel (web app)
 
@@ -298,6 +384,8 @@ web app. Do the steps in this order, because each one needs an address from the 
 
    The build reads this address twice: the app calls it, and the page's
    Content-Security-Policy allows it. If the address changes, redeploy the web app.
+   No secret belongs in the web app's environment: everything named `VITE_` ends up in
+   the files that browsers download.
 4. Deploy, then copy the Vercel address into `CORS_ALLOWED_ORIGINS` on Render and let
    Render redeploy. Without this the browser blocks every call from the web app.
 
@@ -306,9 +394,20 @@ web app. Do the steps in this order, because each one needs an address from the 
 1. Run the smoke test against the live addresses (see "Smoke test" below).
 2. Open the Vercel address. The first load can show "Waking server" for up to a
    minute, because the free Render plan sleeps when idle.
-3. On the dashboard, open the settings in the header and enter the admin token if you set
-   one, then run a drill.
+3. Run a drill without a token and see the "public drill" tag. Then open the settings in
+   the header, enter the admin token, and run another one, which also posts to Slack.
 4. Watch the charts cross the dashed SLO lines, then open `/incidents` and `/status`.
+
+## Security
+
+How to report a problem, what is in scope, and which risks are accepted on purpose for a
+public demo are written down in [SECURITY.md](SECURITY.md). In short: the demo instance
+is shared by everyone, public drills are open by design, and no secret ever reaches the
+browser bundle or the logs.
+
+Dependencies are checked on every push: `govulncheck` for Go, `npm audit` for the web
+app, and both fail the build on a finding. Dependabot proposes updates once a week, and
+every GitHub Action is pinned to a full commit.
 
 ## Testing
 
@@ -328,6 +427,10 @@ set. With Docker:
 `TEST_DATABASE_URL` must be written as a URL. Every test creates its own schema named
 `test_...` and drops it afterwards, so tests never see the rows of another test. Do not
 point it at a database you care about.
+
+To scan for known vulnerabilities the way CI does:
+
+    go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 ### Benchmarks
 
@@ -361,15 +464,26 @@ Bash and on Linux.
     bash scripts/smoke.sh
 
 It waits up to 90 seconds for a sleeping instance to wake, then checks `/healthz`,
-`/readyz`, `/api/v1/status`, the security headers and a CORS preflight from the web
-origin. Only when `ADMIN_TOKEN` is given, it starts a tiny 10 second drill, finds it in
-the list, halts it, and checks that a write without the token is refused. The drill is
-too weak to break an SLO, so it declares no incident and posts nothing to Slack. Every
-check prints `PASS`, `FAIL` or `SKIP`, and the script exits with a non-zero code when
-anything failed. The token is never printed.
+`/readyz`, `/api/v1/status`, the security headers (and `Strict-Transport-Security` when
+the address is HTTPS), `/api/v1/config`, and a CORS preflight from the web origin.
+
+Only when `ADMIN_TOKEN` is given, it starts a tiny 10 second drill with the token, finds
+it in the list, checks that a request without the token cannot halt it, and halts it with
+the token. Then it sends a write without the token: on a server with public drills on,
+that must start a public drill, which the script halts again; on a server with them off,
+it must be refused.
+
+The drills are too weak to break an SLO, so they declare no incident and post nothing to
+Slack. Every check prints `PASS`, `FAIL` or `SKIP`, and the script exits with a non-zero
+code when anything failed. The token is never printed.
 
 ### CI
 
 Every push and pull request to `main` runs gofmt, `go vet`, `go test -race` with a
-Postgres service, the four web checks and `npm audit` at high severity. A separate job
-runs `govulncheck`; it reports its findings but does not block the build yet.
+Postgres service, `govulncheck`, the four web checks and `npm audit` at high severity.
+Every Go job builds with the toolchain named in `go.mod` and fails if any other Go is in
+use. A push to `main` also runs the benchmarks and keeps their output.
+
+## License
+
+[MIT](LICENSE)
