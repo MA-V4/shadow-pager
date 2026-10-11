@@ -1,8 +1,20 @@
 import { describe, expect, it } from 'vitest'
 
 import { failureModes, severities } from '../api/types'
-import { breachLabels, failureModeLabels, incidentStatusLabels, labelOf, serviceLevelLabels, severityLabels, simulationStateLabels } from './labels'
-import { breachingMetrics, isMetricKey, metricDefs, metricKeys } from './metrics'
+import {
+  breachLabels,
+  failureModeDescriptions,
+  failureModeLabels,
+  failureModePhrases,
+  incidentStatusLabels,
+  inSentence,
+  labelOf,
+  serviceLevelLabels,
+  severityLabels,
+  simulationStateLabels,
+  startedSentence,
+} from './labels'
+import { breachingMetrics, isMetricKey, metricDefs, metricKeys, splitUnit, tickLabel } from './metrics'
 
 describe('labels', () => {
   it('names every failure mode properly, with acronyms in capitals', () => {
@@ -42,6 +54,49 @@ describe('labels', () => {
   })
 })
 
+describe('sentence casing', () => {
+  it('keeps labels in sentence case, with a capital only at the start and on acronyms', () => {
+    for (const label of Object.values(failureModeLabels)) {
+      const [first, ...rest] = label.split(' ')
+      expect(first?.charAt(0)).toBe(first?.charAt(0).toUpperCase())
+      for (const word of rest) {
+        expect(word).toBe(word.toLowerCase())
+      }
+    }
+  })
+
+  it.each([
+    ['Latency spike', 'latency spike'],
+    ['Error rate surge', 'error rate surge'],
+    ['Memory leak', 'memory leak'],
+    ['CPU saturation', 'CPU saturation'],
+    ['DB pool exhaustion', 'DB pool exhaustion'],
+    ['A', 'a'],
+    ['', ''],
+  ])('writes %s as %s inside a sentence', (label, want) => {
+    expect(inSentence(label)).toBe(want)
+  })
+
+  it.each([
+    ['latency_spike', 'Started a latency spike on payments-api.'],
+    ['error_rate_surge', 'Started an error rate surge on payments-api.'],
+    ['memory_leak', 'Started a memory leak on payments-api.'],
+    ['cpu_saturation', 'Started CPU saturation on payments-api.'],
+    ['db_pool_exhaustion', 'Started DB pool exhaustion on payments-api.'],
+    ['disk_full', 'Started disk full on payments-api.'],
+  ])('says that %s started without a capital in the middle', (mode, want) => {
+    expect(startedSentence(mode, 'payments-api')).toBe(want)
+  })
+
+  it('has a phrase and a one line description for every failure mode', () => {
+    for (const mode of failureModes) {
+      expect(failureModePhrases[mode]).toContain(inSentence(failureModeLabels[mode]))
+      expect(failureModeDescriptions[mode].endsWith('.')).toBe(true)
+      expect(failureModeDescriptions[mode].length).toBeLessThanOrEqual(40)
+    }
+  })
+})
+
 describe('metrics', () => {
   it('uses the same keys the API uses in its list of breaches', () => {
     expect(metricKeys).toEqual(['latency_p99', 'error_rate', 'cpu', 'memory'])
@@ -56,12 +111,22 @@ describe('metrics', () => {
     expect(metricDefs.memory.format(2048)).toBe('2,048 MB')
   })
 
-  it('formats axis ticks as plain round numbers, never shortened ones like 2.4K', () => {
-    expect(metricDefs.latency_p99.formatTick(1000)).toBe('1,000')
-    expect(metricDefs.memory.formatTick(2500)).toBe('2,500')
-    expect(metricDefs.error_rate.formatTick(0.015)).toBe('1.5%')
-    expect(metricDefs.error_rate.formatTick(0)).toBe('0%')
-    expect(metricDefs.cpu.formatTick(100)).toBe('100%')
+  it('cuts a value into its number and its unit', () => {
+    expect(splitUnit(metricDefs.latency_p99.format(824))).toEqual(['824', `${String.fromCharCode(160)}ms`])
+    expect(splitUnit('1.23%')).toEqual(['1.23', '%'])
+    expect(splitUnit('2,048')).toEqual(['2,048', ''])
+    expect(splitUnit('-')).toEqual(['-', ''])
+  })
+
+  it('labels axis ticks with plain round numbers and puts the unit on the top one only', () => {
+    expect(tickLabel(metricDefs.latency_p99, 500, false)).toBe('500')
+    expect(tickLabel(metricDefs.latency_p99, 1000, false)).toBe('1,000')
+    expect(tickLabel(metricDefs.latency_p99, 1000, true)).toBe(`1,000${String.fromCharCode(160)}ms`)
+    expect(tickLabel(metricDefs.memory, 3000, true)).toBe(`3,000${String.fromCharCode(160)}MB`)
+    expect(tickLabel(metricDefs.error_rate, 0.005, false)).toBe('0.5')
+    expect(tickLabel(metricDefs.error_rate, 0.015, true)).toBe('1.5%')
+    expect(tickLabel(metricDefs.cpu, 0, false)).toBe('0')
+    expect(tickLabel(metricDefs.cpu, 150, true)).toBe('150%')
   })
 
   it('reads the breaching metrics off the newest sample in a fixed order', () => {

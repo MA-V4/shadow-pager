@@ -4,11 +4,15 @@ import { api } from '../api/client'
 import type { Incident } from '../api/types'
 import { useResource } from '../api/useResource'
 import { EmptyState, ErrorNotice, LoadingBlock, WakingNotice } from '../components/Notice'
-import { IncidentStatusPill, SeverityPill } from '../components/Pills'
-import { formatDateTime, formatGoDuration } from '../lib/format'
+import { ShapeGlyph } from '../components/ShapeGlyph'
+import { IncidentStatusTag, SeverityTag } from '../components/Tags'
+import { Overline } from '../components/ui/overline'
+import { connectionOf, useReportConnection } from '../lib/connection'
+import { formatAgo, formatDateTime } from '../lib/format'
+import { incidentDuration } from '../lib/incidents'
 import { failureModeLabels, labelOf } from '../lib/labels'
 import type { PageRoute } from '../lib/routes'
-import { cn } from '../lib/utils'
+import { useNow } from '../lib/useNow'
 
 export const route: PageRoute = { path: '/incidents', label: 'Incidents', order: 2 }
 
@@ -16,51 +20,71 @@ export const route: PageRoute = { path: '/incidents', label: 'Incidents', order:
 const refreshMs = 10_000
 
 // IncidentRow is one incident in the list, and the whole row is a link to its detail page.
-function IncidentRow({ incident }: { incident: Incident }) {
+function IncidentRow({ incident, now }: { incident: Incident; now: number }) {
   const open = incident.status !== 'resolved'
   return (
-    <li>
+    <li className="border-b border-subtle">
       <Link
         to={`/incidents/${encodeURIComponent(incident.id)}`}
-        className={cn(
-          'flex flex-col gap-2 border-l-[3px] border-l-transparent px-4 py-3 transition-colors duration-150 hover:bg-muted/60 sm:flex-row sm:items-center sm:gap-4',
-          // Only an incident that nobody has picked up yet gets the red edge.
-          incident.status === 'declared' && 'border-l-bad',
-        )}
+        className="grid min-h-11 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-2 py-2 transition-colors duration-150 ease-out hover:bg-raised lg:grid-cols-[8.5rem_minmax(0,1fr)_minmax(0,1.3fr)_auto_5.5rem_4.5rem] lg:py-0"
       >
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className={cn('truncate', open ? 'font-medium' : 'text-muted-foreground')}>
-            {labelOf(failureModeLabels, incident.mode)} on{' '}
-            <span className="font-mono" translate="no">
-              {incident.service}
-            </span>
-          </span>
-          <span className="truncate text-xs text-muted-foreground">
-            Declared {formatDateTime(incident.declared_at)}
-            {incident.time_to_resolve === undefined ? '' : `, resolved after ${formatGoDuration(incident.time_to_resolve)}`}
-          </span>
-        </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
-          <SeverityPill severity={incident.severity} />
-          <IncidentStatusPill status={incident.status} />
-        </div>
+        <span className="truncate font-mono text-body text-primary" translate="no">
+          {incident.id}
+        </span>
+        <span className="order-3 col-span-2 truncate font-mono text-body text-secondary lg:order-0 lg:col-span-1" translate="no">
+          {incident.service}
+        </span>
+        <span className="order-4 col-span-2 flex min-w-0 items-center gap-2 text-body text-secondary lg:order-0 lg:col-span-1">
+          <ShapeGlyph mode={incident.mode} />
+          <span className="truncate">{labelOf(failureModeLabels, incident.mode)}</span>
+        </span>
+        <span className="order-5 flex items-center gap-2 lg:order-0 lg:justify-end">
+          <SeverityTag severity={incident.severity} />
+          {/* A row under "Resolved" does not repeat that word, and an open row says how far along it is. */}
+          {open ? <IncidentStatusTag status={incident.status} /> : null}
+        </span>
+        <span className="order-6 text-right font-mono text-meta text-secondary lg:order-0" title={open ? 'Open for' : 'Time to resolve'}>
+          <span className="sr-only">{open ? 'open for ' : 'resolved after '}</span>
+          {incidentDuration(incident, now)}
+        </span>
+        <time dateTime={incident.declared_at} title={formatDateTime(incident.declared_at)} className="order-2 text-right text-meta text-tertiary lg:order-0">
+          {formatAgo(incident.declared_at, now)}
+        </time>
       </Link>
     </li>
   )
 }
 
-// IncidentsPage lists every incident, newest first, with its severity and how far along it is.
+// IncidentList is one dense group of incidents under a small section label.
+function IncidentList({ id, label, incidents, now }: { id: string; label: string; incidents: Incident[]; now: number }) {
+  return (
+    <section aria-labelledby={id} className="flex flex-col gap-3">
+      <Overline as="h2" id={id}>
+        {label}
+      </Overline>
+      <ul aria-labelledby={id} className="border-t border-subtle">
+        {incidents.map((incident) => (
+          <IncidentRow key={incident.id} incident={incident} now={now} />
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+// IncidentsPage lists every incident, open ones first, with its severity and how far along it is.
 export default function IncidentsPage() {
+  const now = useNow()
   const incidents = useResource((signal) => api.listIncidents(signal), 'incidents', { refreshMs })
+  useReportConnection(connectionOf(incidents.phase))
   const list = incidents.data?.incidents ?? []
   const open = list.filter((incident) => incident.status !== 'resolved')
   const resolved = list.filter((incident) => incident.status === 'resolved')
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-8">
       <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Incidents</h1>
-        <p className="max-w-[65ch] text-sm text-muted-foreground">
+        <h1 className="text-heading text-primary">Incidents</h1>
+        <p className="max-w-[65ch] text-body text-secondary">
           An incident is declared when a simulation breaks its SLO. Responders move it along from Slack.
         </p>
       </div>
@@ -68,32 +92,20 @@ export default function IncidentsPage() {
       {incidents.phase === 'loading' ? <LoadingBlock label="Loading incidents…" lines={4} /> : null}
       {incidents.phase === 'waking' ? <WakingNotice /> : null}
       {incidents.phase === 'error' ? (
-        <ErrorNotice
-          title="Could not load the incidents"
-          message={incidents.error?.message ?? 'Unknown error.'}
-          onRetry={incidents.reload}
-        />
+        <ErrorNotice title="Could not load the incidents" message={incidents.error?.message ?? 'Unknown error.'} onRetry={incidents.reload} />
       ) : null}
       {incidents.phase === 'ready' && list.length === 0 ? (
-        <EmptyState title="No incidents yet">
-          Inject a failure on the{' '}
-          <Link to="/" className="underline underline-offset-4 hover:text-foreground">
+        <EmptyState title="No incidents yet.">
+          Run a drill on the{' '}
+          <Link to="/" className="rounded-sm text-accent underline underline-offset-4">
             dashboard
           </Link>{' '}
           and wait for it to break its SLO.
         </EmptyState>
       ) : null}
 
-      {list.length > 0 ? (
-        <ul className="divide-y overflow-hidden rounded-lg border bg-card shadow-card" aria-label="Incidents, newest first">
-          {open.map((incident) => (
-            <IncidentRow key={incident.id} incident={incident} />
-          ))}
-          {resolved.map((incident) => (
-            <IncidentRow key={incident.id} incident={incident} />
-          ))}
-        </ul>
-      ) : null}
+      {open.length > 0 ? <IncidentList id="open-incidents" label="Open" incidents={open} now={now} /> : null}
+      {resolved.length > 0 ? <IncidentList id="resolved-incidents" label="Resolved" incidents={resolved} now={now} /> : null}
     </div>
   )
 }

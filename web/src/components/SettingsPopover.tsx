@@ -2,15 +2,27 @@ import { useEffect, useId, useRef, useState } from 'react'
 
 import { useAdminToken } from '../lib/adminToken'
 import { useTheme, type Theme } from '../lib/theme'
-import { cn } from '../lib/utils'
 import { Button } from './ui/button'
+import type { Choice } from './ui/choice'
+import { Segmented } from './ui/choice'
 import { Input } from './ui/input'
 import { Label } from './ui/label'
 
-const themes: { value: Theme; label: string }[] = [
+const themes: Choice<Theme>[] = [
   { value: 'dark', label: 'Dark' },
   { value: 'light', label: 'Light' },
 ]
+
+// SettingsIcon is two sliders, drawn from plain lines and circles because the app ships no icon package.
+function SettingsIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+      <path d="M2 4.5h6.5M13 4.5h1M2 11.5h1M7.5 11.5H14" />
+      <circle cx="10.75" cy="4.5" r="1.75" />
+      <circle cx="5.25" cy="11.5" r="1.75" />
+    </svg>
+  )
+}
 
 // SettingsPopover is the small panel in the header for things you set once: the admin token and the theme.
 export function SettingsPopover() {
@@ -46,22 +58,22 @@ export function SettingsPopover() {
   }, [open])
 
   return (
-    <div ref={root} className="relative">
+    <div ref={root} className="relative shrink-0">
       <Button
         ref={trigger}
         variant="ghost"
-        size="sm"
+        size="icon"
         onClick={() => setOpen((o) => !o)}
+        aria-label={token === '' ? 'Settings' : 'Settings, admin token saved'}
+        title="Settings"
         aria-expanded={open}
         aria-controls={`${id}-panel`}
         aria-haspopup="dialog"
+        className="relative"
       >
-        Settings
-        {token === '' ? null : (
-          <span className="rounded-full border px-1.5 text-[11px] leading-4 text-muted-foreground">
-            <span className="sr-only">, </span>token set
-          </span>
-        )}
+        <SettingsIcon />
+        {/* A small mark says that a token is saved, without ever showing the token. */}
+        {token === '' ? null : <span aria-hidden="true" data-token-mark="" className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-accent" />}
       </Button>
 
       {open ? (
@@ -69,9 +81,16 @@ export function SettingsPopover() {
           id={`${id}-panel`}
           role="dialog"
           aria-label="Settings"
-          className="absolute right-0 top-full z-30 mt-2 flex w-[min(22rem,calc(100vw-2rem))] flex-col gap-5 overscroll-contain rounded-lg border bg-card p-4 shadow-pop"
+          className="absolute right-0 top-full z-30 mt-2 flex w-[min(20rem,calc(100vw-2rem))] flex-col gap-4 overscroll-contain rounded-lg border border-subtle bg-raised p-4 shadow-pop"
         >
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
+            <span id={`${id}-theme`} className="text-label text-primary">
+              Theme
+            </span>
+            <Segmented name={`${id}-theme`} labelledBy={`${id}-theme`} value={theme} options={themes} onChange={setTheme} />
+          </div>
+
+          <div className="flex flex-col gap-2">
             <Label htmlFor={`${id}-token`}>Admin token</Label>
             <Input
               id={`${id}-token`}
@@ -83,36 +102,12 @@ export function SettingsPopover() {
               spellCheck={false}
               placeholder="Paste the token…"
               aria-describedby={`${id}-token-hint`}
+              className="font-mono"
             />
-            <p id={`${id}-token-hint`} className="text-xs text-muted-foreground">
+            <p id={`${id}-token-hint`} className="text-meta text-tertiary">
               Only needed when the server was started with an admin token. It is saved in this browser and nowhere else.
             </p>
           </div>
-
-          <fieldset className="flex flex-col gap-1.5">
-            <legend className="mb-1.5 text-sm font-medium leading-none">Theme</legend>
-            <div className="grid grid-cols-2 gap-1 rounded-md border bg-muted p-1">
-              {themes.map((option) => (
-                <label
-                  key={option.value}
-                  className={cn(
-                    'flex h-8 cursor-pointer items-center justify-center rounded-[4px] text-sm font-medium text-muted-foreground transition-colors duration-150 hover:text-foreground has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-ring',
-                    theme === option.value && 'bg-card text-foreground shadow-card',
-                  )}
-                >
-                  <input
-                    type="radio"
-                    name={`${id}-theme`}
-                    value={option.value}
-                    checked={theme === option.value}
-                    onChange={() => setTheme(option.value)}
-                    className="sr-only"
-                  />
-                  {option.label}
-                </label>
-              ))}
-            </div>
-          </fieldset>
         </div>
       ) : null}
     </div>

@@ -12,8 +12,8 @@ const pages = sortedPages(import.meta.glob<PageModule>('./pages/*Page.tsx', { ea
 // NotFound is shown for any URL that no page claims.
 function NotFound() {
   return (
-    <EmptyState title="This page does not exist">
-      <Link to="/" className="underline underline-offset-4">
+    <EmptyState title="This page does not exist.">
+      <Link to="/" className="rounded-sm text-accent underline underline-offset-4">
         Go back to the start
       </Link>
     </EmptyState>

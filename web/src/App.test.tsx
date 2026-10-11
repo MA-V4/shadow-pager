@@ -14,7 +14,7 @@ describe('AppRoutes', () => {
 
     expect(screen.getByRole('link', { name: 'Shadow-Pager' })).toBeTruthy()
     expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy()
-    expect(screen.getByText('This page does not exist')).toBeTruthy()
+    expect(screen.getByText('This page does not exist.')).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Go back to the start' }).getAttribute('href')).toBe('/')
   })
 

@@ -1,15 +1,16 @@
-import type { InputHTMLAttributes, SelectHTMLAttributes } from 'react'
+import type { InputHTMLAttributes } from 'react'
 
 import { cn } from '../../lib/utils'
 
-const fieldClass =
-  'h-10 w-full min-w-0 rounded-md border border-input bg-background px-3 text-base text-foreground transition-[border-color] duration-150 placeholder:text-muted-foreground hover:border-muted-foreground/60 disabled:cursor-not-allowed disabled:opacity-50 aria-[invalid=true]:border-bad sm:text-sm'
-
+// Input is the one text field of the app: sunk into the page, with a strong edge that turns red when it is wrong.
 export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
-  return <input className={cn(fieldClass, className)} {...props} />
-}
-
-// Select is the browser's own select with our look, because it works well with keyboards and phones.
-export function Select({ className, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
-  return <select className={cn(fieldClass, 'pr-8', className)} {...props} />
+  return (
+    <input
+      className={cn(
+        'h-9 w-full min-w-0 rounded-md border border-strong bg-inset px-3 text-base text-primary transition-[border-color] duration-150 ease-out placeholder:text-tertiary hover:border-tertiary disabled:cursor-not-allowed disabled:opacity-50 aria-[invalid=true]:border-breach sm:text-body pointer-coarse:h-10',
+        className,
+      )}
+      {...props}
+    />
+  )
 }

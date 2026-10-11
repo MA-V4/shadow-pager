@@ -62,40 +62,53 @@ afterEach(() => {
 // LIST TESTS
 
 describe('IncidentsPage', () => {
-  it('lists incidents with badges and links to their detail pages', async () => {
-    vi.spyOn(api, 'listIncidents').mockResolvedValue({ incidents: [open, closed] })
+  it('lists open incidents first as dense rows that link to their detail pages', async () => {
+    vi.spyOn(api, 'listIncidents').mockResolvedValue({ incidents: [closed, open] })
 
     renderAt('/incidents')
 
-    const list = await screen.findByRole('list', { name: 'Incidents, newest first' })
-    const rows = within(list).getAllByRole('link')
-    expect(rows).toHaveLength(2)
-
-    const first = rows[0]
-    if (!first) {
-      throw new Error('the first row is missing')
-    }
+    const openList = await screen.findByRole('list', { name: 'Open' })
+    const first = within(openList).getByRole('link')
     expect(first.getAttribute('href')).toBe('/incidents/inc_open')
+    expect(within(first).getByText('inc_open').className).toContain('font-mono')
+    expect(within(first).getByText('payments-api').className).toContain('font-mono')
+    expect(within(first).getByText('Latency spike')).toBeTruthy()
+    expect(first.querySelector('[data-shape="spike"]')).toBeTruthy()
     expect(within(first).getByText('Critical')).toBeTruthy()
     expect(within(first).getByText('Acknowledged')).toBeTruthy()
-    expect(first.textContent).toContain('Latency spike on payments-api')
+    expect(first.textContent).toContain('open for ')
+    // Rows are 44px tall and split by hairlines, with no card around them.
+    expect(first.className).toContain('min-h-11')
 
-    const second = rows[1]
-    if (!second) {
-      throw new Error('the second row is missing')
-    }
+    const resolvedList = screen.getByRole('list', { name: 'Resolved' })
+    const second = within(resolvedList).getByRole('link')
+    expect(second.getAttribute('href')).toBe('/incidents/inc_closed')
     expect(within(second).getByText('Minor')).toBeTruthy()
-    expect(within(second).getByText('Resolved')).toBeTruthy()
     expect(second.textContent).toContain('resolved after 5m')
+    // The section already says "Resolved", so the rows under it do not repeat the word.
+    expect(within(second).queryByText('Resolved')).toBeNull()
+
+    // The open list comes before the resolved one on the page.
+    expect(openList.compareDocumentPosition(resolvedList) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('leaves out a section that has nothing in it', async () => {
+    vi.spyOn(api, 'listIncidents').mockResolvedValue({ incidents: [closed] })
+
+    renderAt('/incidents')
+
+    expect(await screen.findByRole('list', { name: 'Resolved' })).toBeTruthy()
+    expect(screen.queryByRole('list', { name: 'Open' })).toBeNull()
   })
 
   it('explains what to do when there are no incidents', async () => {
     vi.spyOn(api, 'listIncidents').mockResolvedValue({ incidents: [] })
 
-    renderAt('/incidents')
+    const { container } = renderAt('/incidents')
 
-    expect(await screen.findByText('No incidents yet')).toBeTruthy()
+    expect(await screen.findByText('No incidents yet.')).toBeTruthy()
     expect(screen.getByRole('link', { name: 'dashboard' }).getAttribute('href')).toBe('/')
+    expect(container.querySelector('[data-flatline]')).toBeTruthy()
   })
 
   it('shows the error when the list cannot be loaded', async () => {
@@ -112,50 +125,71 @@ describe('IncidentsPage', () => {
 // DETAIL TESTS
 
 describe('IncidentDetailPage', () => {
-  it('shows the summary, the durations and the timeline', async () => {
+  it('shows the header, the two readouts and the flight recorder tape', async () => {
     const get = vi.spyOn(api, 'getIncident').mockResolvedValue(closed)
 
-    renderAt('/incidents/inc_closed')
+    const { container } = renderAt('/incidents/inc_closed')
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'CPU saturation on checkout' })).toBeTruthy()
+    const heading = await screen.findByRole('heading', { level: 1, name: 'inc_closed' })
+    expect(heading.className).toContain('font-mono')
     expect(get.mock.calls[0]?.[0]).toBe('inc_closed')
+    expect(screen.getByText('Resolved')).toBeTruthy()
+    expect(screen.getByText('Minor')).toBeTruthy()
+    expect(screen.getByText(/CPU saturation on/).textContent).toBe('CPU saturation on checkout')
+    expect(screen.getByText('lasted 5m')).toBeTruthy()
+    // A resolved incident has no rail.
+    expect(container.querySelector('[data-rail]')).toBeNull()
 
     expect(term('Time to acknowledge')).toBe('1m 30s')
     expect(term('Time to resolve')).toBe('5m')
+    const readout = Array.from(document.querySelectorAll('dt')).find((dt) => dt.textContent === 'Time to resolve')?.nextElementSibling
+    expect(readout?.className).toContain('text-readout')
+    expect(readout?.className).toContain('font-mono')
     expect(term('Acknowledged by')).toBe('Slack user U123ABC')
     expect(term('SLO breaches at declaration')).toBe('Latency p99, Error rate')
     expect(term('Simulation')).toBe('sim_1')
 
-    // This incident went from acknowledged straight to resolved, and the lifecycle says so.
-    const steps = within(screen.getByRole('list', { name: 'Lifecycle' })).getAllByRole('listitem')
-    expect(steps.map((s) => s.firstElementChild?.textContent)).toEqual(['Declared', 'Acknowledged', 'Mitigated', 'Resolved'])
-    expect(steps[2]?.textContent).toContain('Skipped')
-    expect(steps[3]?.textContent).not.toContain('Not yet')
-
-    const timeline = screen.getByRole('list', { name: 'Timeline, oldest first' })
-    const entries = within(timeline).getAllByRole('listitem')
+    const tape = screen.getByRole('list', { name: 'Timeline, oldest first' })
+    const entries = within(tape).getAllByRole('listitem')
     expect(entries).toHaveLength(2)
+    // Each entry is a mono time on the left, then what happened and who did it on the right.
+    const time = entries[0]?.querySelector('time')
+    expect(entries[0]?.firstElementChild).toBe(time)
+    expect(time?.className).toContain('font-mono')
+    expect(time?.textContent).toMatch(/^\d{2}:\d{2}:\d{2}$/)
+    expect(time?.getAttribute('datetime')).toBe('2026-01-02T15:04:05Z')
     expect(entries[0]?.textContent).toContain('Incident declared')
     expect(entries[0]?.textContent).toContain('by Shadow-Pager (automatic)')
     expect(entries[1]?.textContent).toContain('by Slack user U123ABC')
     expect(screen.getByRole('link', { name: 'Back to all incidents' }).getAttribute('href')).toBe('/incidents')
   })
 
-  it('says so for steps that have not happened yet', async () => {
+  it('says so for steps that have not happened yet, and lights a pulsing rail while nobody has picked it up', async () => {
     const declared: Incident = { ...open, status: 'declared' }
     delete declared.acknowledged_at
     delete declared.acknowledged_by
     delete declared.time_to_acknowledge
     vi.spyOn(api, 'getIncident').mockResolvedValue(declared)
 
-    renderAt('/incidents/inc_open')
+    const { container } = renderAt('/incidents/inc_open')
 
     await screen.findByRole('heading', { level: 1 })
     expect(term('Time to acknowledge')).toBe('Not acknowledged')
     expect(term('Time to resolve')).toBe('Not resolved yet')
     expect(term('Acknowledged by')).toBe('-')
-    const steps = within(screen.getByRole('list', { name: 'Lifecycle' })).getAllByRole('listitem')
-    expect(steps.slice(1).every((s) => s.textContent?.includes('Not yet'))).toBe(true)
+    expect(screen.getByText(/^open for /)).toBeTruthy()
+    expect(container.querySelector('[data-rail="breach"]')?.className).toContain('animate-rail')
+  })
+
+  it('gives an acknowledged incident an amber rail that stays still', async () => {
+    vi.spyOn(api, 'getIncident').mockResolvedValue(open)
+
+    const { container } = renderAt('/incidents/inc_open')
+
+    await screen.findByRole('heading', { level: 1 })
+    const rail = container.querySelector('[data-rail="warn"]')
+    expect(rail).toBeTruthy()
+    expect(rail?.className).not.toContain('animate-rail')
   })
 
   it('has a friendly message for an incident that does not exist', async () => {
@@ -163,7 +197,7 @@ describe('IncidentDetailPage', () => {
 
     renderAt('/incidents/inc_x')
 
-    expect(await screen.findByText('This incident does not exist')).toBeTruthy()
+    expect(await screen.findByText('This incident does not exist.')).toBeTruthy()
     expect(screen.queryByText('Could not load the incident')).toBeNull()
   })
 

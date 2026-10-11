@@ -4,24 +4,23 @@ import type { ButtonHTMLAttributes, Ref } from 'react'
 
 import { cn } from '../../lib/utils'
 
+// Buttons are 36px tall with a mouse and 40px under a finger, so they are always easy to hit.
 const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-[background-color,border-color,color,transform] duration-150 active:translate-y-px disabled:pointer-events-none disabled:opacity-50',
+  'inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-md text-label transition-[background-color,border-color,color,transform] duration-150 ease-out active:translate-y-px disabled:pointer-events-none disabled:opacity-50',
   {
     variants: {
       variant: {
-        default: 'bg-primary text-primary-foreground hover:bg-primary/90',
-        secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
-        outline: 'border border-input bg-transparent hover:border-muted-foreground/60 hover:bg-muted',
-        destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90',
-        ghost: 'hover:bg-muted',
+        primary: 'bg-primary text-canvas hover:bg-primary/90',
+        secondary: 'border border-strong bg-transparent text-primary hover:bg-raised',
+        destructive: 'border border-strong bg-transparent text-primary hover:border-breach hover:text-breach',
+        ghost: 'bg-transparent text-secondary hover:bg-raised hover:text-primary',
       },
       size: {
-        default: 'h-10 px-4',
-        sm: 'h-8 px-3 text-[13px]',
-        icon: 'h-10 w-10',
+        default: 'h-9 px-4 pointer-coarse:h-10',
+        icon: 'h-9 w-9 pointer-coarse:h-10 pointer-coarse:w-10',
       },
     },
-    defaultVariants: { variant: 'default', size: 'default' },
+    defaultVariants: { variant: 'primary', size: 'default' },
   },
 )
 

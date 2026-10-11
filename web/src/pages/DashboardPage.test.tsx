@@ -1,10 +1,12 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { api, ApiError } from '../api/client'
-import type { MetricSample, Simulation } from '../api/types'
+import type { Incident, MetricSample, Simulation } from '../api/types'
 import { resetAdminTokenForTests, setAdminToken } from '../lib/adminToken'
 import { splitInjectErrors } from '../lib/apiMessages'
+import { getConnection } from '../lib/connection'
 import { addSample, keepOnly, maxSamplesPerSimulation } from '../lib/samples'
 import DashboardPage from './DashboardPage'
 
@@ -20,7 +22,7 @@ vi.mock('../api/useEventStream', () => ({
 }))
 
 // A space that never breaks sits between a number and its unit.
-const nbsp = ' '
+const nbsp = String.fromCharCode(160)
 
 // runningSimulation builds a simulation that started 30 seconds ago and runs for two minutes.
 function runningSimulation(id: string, service: string): Simulation {
@@ -35,6 +37,17 @@ function runningSimulation(id: string, service: string): Simulation {
     state: 'running',
     started_at: new Date(now - 30_000).toISOString(),
     ends_at: new Date(now + 90_000).toISOString(),
+  }
+}
+
+// finishedSimulation builds a simulation that ran for 45 seconds and ended two minutes ago.
+function finishedSimulation(id: string, service: string, state: 'halted' | 'resolved'): Simulation {
+  const now = Date.now()
+  return {
+    ...runningSimulation(id, service),
+    state,
+    started_at: new Date(now - 165_000).toISOString(),
+    ended_at: new Date(now - 120_000).toISOString(),
   }
 }
 
@@ -53,6 +66,35 @@ function sample(latency: number, healthy: boolean, simulationId = 'sim_1'): Metr
   }
 }
 
+function incidentFor(id: string, simulationId: string): Incident {
+  return {
+    id,
+    simulation_id: simulationId,
+    service: 'checkout',
+    mode: 'cpu_saturation',
+    severity: 'major',
+    status: 'mitigated',
+    breaches: ['cpu'],
+    declared_at: new Date().toISOString(),
+    timeline: [],
+  }
+}
+
+// renderPage shows the dashboard inside a router, because its lists link to other pages.
+function renderPage() {
+  return render(
+    <MemoryRouter>
+      <DashboardPage />
+    </MemoryRouter>,
+  )
+}
+
+// recentRows gives back the rows of the recently finished list.
+async function recentRows(): Promise<HTMLElement[]> {
+  const list = await screen.findByRole('list', { name: 'Recently finished simulations' })
+  return within(list).getAllByRole('listitem')
+}
+
 let running: Simulation
 let halted: Simulation
 
@@ -60,9 +102,10 @@ beforeEach(() => {
   window.localStorage.clear()
   resetAdminTokenForTests()
   running = runningSimulation('sim_1', 'payments-api')
-  halted = { ...runningSimulation('sim_0', 'checkout'), state: 'halted', ended_at: new Date().toISOString() }
+  halted = finishedSimulation('sim_0', 'checkout', 'halted')
   vi.spyOn(api, 'getSlo').mockResolvedValue({ max_latency_p99_ms: 500, max_error_rate: 0.01, max_cpu_percent: 90, max_memory_mb: 2048 })
   vi.spyOn(api, 'listSimulations').mockResolvedValue({ simulations: [running, halted] })
+  vi.spyOn(api, 'listIncidents').mockResolvedValue({ incidents: [] })
 })
 
 afterEach(() => {
@@ -72,14 +115,16 @@ afterEach(() => {
 // PAGE TESTS
 
 describe('DashboardPage', () => {
-  it('shows healthy metrics as compact tiles and gives a breaching metric the big chart', async () => {
-    render(<DashboardPage />)
+  it('shows healthy metrics as compact rows and gives a breaching metric the big chart', async () => {
+    renderPage()
 
     const panel = await screen.findByRole('article', { name: 'CPU saturation on payments-api' })
-    expect(screen.getByLabelText('Metric stream: Live')).toBeTruthy()
+    const card = screen.getByRole('region', { name: 'Service payments-api' })
     expect(within(panel).getByRole('figure', { name: 'Latency p99: waiting for data' })).toBeTruthy()
     expect(within(panel).queryByLabelText('Metrics over their limit')).toBeNull()
     expect(within(within(panel).getByLabelText('Metrics within their limit')).getAllByRole('figure')).toHaveLength(4)
+    // A healthy card has no rail at all.
+    expect(card.querySelector('[data-rail]')).toBeNull()
 
     act(() => pushSample(sample(120, true)))
     expect(await within(panel).findByText('Within SLO')).toBeTruthy()
@@ -92,7 +137,8 @@ describe('DashboardPage', () => {
     expect(big).toHaveLength(1)
     expect(big[0]?.getAttribute('aria-label')).toBe(`Latency p99: 950${nbsp}ms, above the limit of 500${nbsp}ms`)
     // The breach is said in words too, not only in red.
-    expect(within(loud).getByText('Over the limit')).toBeTruthy()
+    expect(big[0]?.textContent).toContain('over the limit')
+    expect(big[0]?.textContent).toContain(`950${nbsp}ms`)
 
     const calm = within(within(panel).getByLabelText('Metrics within their limit')).getAllByRole('figure')
     expect(calm.map((f) => f.getAttribute('aria-label'))).toEqual([
@@ -102,13 +148,26 @@ describe('DashboardPage', () => {
     ])
     expect(within(panel).getByText('Breaching SLO')).toBeTruthy()
     expect(screen.getByText('1 simulation is breaching SLO')).toBeTruthy()
+    // The red rail is lit, and it pulses.
+    expect(card.querySelector('[data-rail="breach"]')?.className).toContain('animate-rail')
+  })
+
+  it('keeps only one red thing in a breaching card besides its rail: the breaching value', async () => {
+    renderPage()
+    const card = await screen.findByRole('region', { name: 'Service payments-api' })
+    act(() => pushSample(sample(950, false)))
+    await within(card).findByLabelText('Metrics over their limit')
+
+    const red = Array.from(card.querySelectorAll('[class*="text-breach"]')).filter((el) => !el.className.includes('hover:text-breach'))
+    expect(red).toHaveLength(1)
+    expect(red[0]?.textContent).toBe(`950${nbsp}ms`)
   })
 
   it('groups running simulations by service and puts the breaching service first', async () => {
     const quiet = runningSimulation('sim_2', 'checkout')
     const second = runningSimulation('sim_3', 'payments-api')
     vi.mocked(api.listSimulations).mockResolvedValue({ simulations: [quiet, running, second] })
-    render(<DashboardPage />)
+    renderPage()
     await screen.findByRole('article', { name: 'CPU saturation on checkout' })
 
     act(() => {
@@ -124,14 +183,15 @@ describe('DashboardPage', () => {
     if (!payments) {
       throw new Error('the payments group is missing')
     }
-    expect(within(payments).getByText('Breaching')).toBeTruthy()
+    expect(within(payments).getByRole('heading', { level: 3, name: 'payments-api' }).className).toContain('font-mono')
     expect(within(payments).getByText('2 simulations')).toBeTruthy()
     expect(within(payments).getAllByRole('article')).toHaveLength(2)
-    expect(within(groups[1] as HTMLElement).getByText('Healthy')).toBeTruthy()
+    expect(payments.querySelector('[data-rail="breach"]')).toBeTruthy()
+    expect(groups[1]?.querySelector('[data-rail]')).toBeNull()
   })
 
   it('shows the time remaining as progress', async () => {
-    render(<DashboardPage />)
+    renderPage()
 
     const bar = await screen.findByRole('progressbar', { name: 'Time elapsed for the simulation on payments-api' })
     const now = Number(bar.getAttribute('aria-valuenow'))
@@ -140,32 +200,32 @@ describe('DashboardPage', () => {
     expect(bar.getAttribute('aria-valuetext')).toMatch(/^1m (29|30)s left of 2m$/)
   })
 
-  it('lists recently finished simulations with proper labels', async () => {
-    render(<DashboardPage />)
+  it('tells the header that the stream is live', async () => {
+    renderPage()
+    await screen.findByRole('article', { name: 'CPU saturation on payments-api' })
 
-    const recent = (await screen.findByRole('heading', { name: 'Recently finished' })).parentElement
-    if (!recent) {
-      throw new Error('the recent section is missing')
-    }
-    expect(within(recent).getByText('checkout')).toBeTruthy()
-    expect(within(recent).getByText(/^CPU saturation, started /)).toBeTruthy()
-    expect(within(recent).getByText('Halted')).toBeTruthy()
+    expect(getConnection()).toBe('live')
+    // The indicator belongs to the header, so the page itself does not draw one.
+    expect(screen.queryByText('Live')).toBeNull()
   })
 
-  it('says so when nothing is running', async () => {
+  it('says so when nothing is running, with a flat line and no leftover success message', async () => {
     vi.mocked(api.listSimulations).mockResolvedValue({ simulations: [] })
 
-    render(<DashboardPage />)
+    const { container } = renderPage()
 
-    expect(await screen.findByText('Nothing is running')).toBeTruthy()
-    expect(screen.getByText('Nothing is running. Inject a failure to begin.')).toBeTruthy()
+    expect(await screen.findByText('No simulations are running.')).toBeTruthy()
+    expect(screen.getByText('Nothing is running.')).toBeTruthy()
     expect(screen.getByText('Simulations move here when they end or are halted.')).toBeTruthy()
+    expect(container.querySelector('[data-flatline]')).toBeTruthy()
+    expect(screen.queryByText(/^Started /)).toBeNull()
+    expect(container.querySelector('[data-feedback]')?.textContent).toBe('')
   })
 
   it('shows the error with a way to try again when the list cannot be loaded', async () => {
     vi.mocked(api.listSimulations).mockRejectedValueOnce(new ApiError(500, 'internal server error'))
 
-    render(<DashboardPage />)
+    renderPage()
 
     expect(await screen.findByText('Could not load the simulations')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
@@ -175,9 +235,13 @@ describe('DashboardPage', () => {
   it('halts a simulation with the admin token from the settings', async () => {
     setAdminToken(' s3cret ')
     const halt = vi.spyOn(api, 'haltSimulation').mockResolvedValue({ ...running, state: 'halted' })
-    render(<DashboardPage />)
+    renderPage()
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Halt the simulation on payments-api' }))
+    const button = await screen.findByRole('button', { name: 'Halt the simulation on payments-api' })
+    // Halt is never a solid red button: it only turns red at its edge and its text when pointed at.
+    expect(button.className).toContain('hover:border-breach')
+    expect(button.className).not.toContain('bg-breach')
+    fireEvent.click(button)
 
     await waitFor(() => expect(halt).toHaveBeenCalledWith('sim_1', 's3cret'))
     await waitFor(() => expect(vi.mocked(api.listSimulations).mock.calls.length).toBeGreaterThan(1))
@@ -185,7 +249,7 @@ describe('DashboardPage', () => {
 
   it('shows the retry time when halting is rate limited', async () => {
     vi.spyOn(api, 'haltSimulation').mockRejectedValue(new ApiError(429, 'too many requests, try again in 12 seconds', 12))
-    render(<DashboardPage />)
+    renderPage()
 
     fireEvent.click(await screen.findByRole('button', { name: 'Halt the simulation on payments-api' }))
 
@@ -193,7 +257,7 @@ describe('DashboardPage', () => {
   })
 
   it('fetches the list again when samples arrive for a simulation it has not seen', async () => {
-    render(<DashboardPage />)
+    renderPage()
     await screen.findByRole('button', { name: 'Halt the simulation on payments-api' })
     const before = vi.mocked(api.listSimulations).mock.calls.length
 
@@ -203,30 +267,105 @@ describe('DashboardPage', () => {
   })
 })
 
+// RECENTLY FINISHED TESTS
+
+describe('recently finished on the dashboard', () => {
+  it('says that a simulation breached and links the incident it caused', async () => {
+    vi.mocked(api.listIncidents).mockResolvedValue({ incidents: [incidentFor('inc_7', 'sim_0')] })
+    renderPage()
+
+    const rows = await recentRows()
+    expect(rows).toHaveLength(1)
+    const row = rows[0] as HTMLElement
+    await waitFor(() => expect(row.querySelector('[data-outcome]')?.textContent).toBe('Breached SLO, incident inc_7, halted early'))
+    expect(within(row).getByRole('link', { name: 'inc_7' }).getAttribute('href')).toBe('/incidents/inc_7')
+    expect(within(row).getByText('checkout').className).toContain('font-mono')
+    expect(within(row).getByText('CPU saturation')).toBeTruthy()
+    expect(row.querySelector('[data-shape="gradual"]')).toBeTruthy()
+    // It ran for 45 seconds and ended two minutes ago.
+    expect(within(row).getByText('45s')).toBeTruthy()
+    expect(within(row).getByText('2m ago')).toBeTruthy()
+  })
+
+  it('says that a simulation stayed healthy when no incident points at it', async () => {
+    const quiet = finishedSimulation('sim_q', 'search', 'resolved')
+    vi.mocked(api.listSimulations).mockResolvedValue({ simulations: [quiet, halted] })
+    renderPage()
+
+    const rows = await recentRows()
+    await waitFor(() => expect(rows[0]?.querySelector('[data-outcome]')?.textContent).toBe('Stayed healthy'))
+    expect(rows[1]?.querySelector('[data-outcome]')?.textContent).toBe('Stayed healthy, halted early')
+    expect(within(rows[0] as HTMLElement).queryByRole('link')).toBeNull()
+    // Nothing repeats the word "Finished" on every row.
+    expect(screen.queryByText('Finished')).toBeNull()
+    expect(screen.queryByText('Halted')).toBeNull()
+  })
+
+  it('does not guess the outcome when the incidents cannot be loaded', async () => {
+    vi.mocked(api.listIncidents).mockRejectedValue(new ApiError(500, 'internal server error'))
+    renderPage()
+
+    const rows = await recentRows()
+    expect(rows[0]?.querySelector('[data-outcome]')?.textContent).toBe('Outcome unknown, halted early')
+  })
+
+  it('shows the peak that this browser saw, and a dash for a simulation nobody watched', async () => {
+    renderPage()
+    const rows = await recentRows()
+    const peak = () => rows[0]?.querySelector('[data-peak]')
+    expect(peak()?.textContent).toBe('Peak-')
+    expect(peak()?.getAttribute('title')).toMatch(/not watched in this browser/)
+
+    // For CPU saturation the peak is the highest CPU value.
+    act(() => {
+      pushSample({ ...sample(120, true, 'sim_0'), cpu_percent: 72 })
+      pushSample({ ...sample(120, true, 'sim_0'), cpu_percent: 97.5 })
+      pushSample({ ...sample(120, true, 'sim_0'), cpu_percent: 40 })
+    })
+
+    await waitFor(() => expect(peak()?.textContent).toBe('Peak97.5%'))
+  })
+})
+
 // FORM TESTS
 
-describe('inject form on the dashboard', () => {
-  it('offers every failure mode by its proper name and has no admin token field', async () => {
-    render(<DashboardPage />)
+describe('drill composer on the dashboard', () => {
+  it('is titled "Run a drill" and offers every failure mode as a card with its drawing', async () => {
+    renderPage()
 
-    const mode = await screen.findByLabelText('Failure mode')
-    const options = within(mode).getAllByRole('option').map((o) => o.textContent)
-    expect(options).toEqual(['Latency spike', 'Error rate surge', 'Memory leak', 'CPU saturation', 'DB pool exhaustion'])
-    expect(within(screen.getByLabelText('Severity')).getAllByRole('option').map((o) => o.textContent)).toEqual(['Critical', 'Major', 'Minor'])
+    expect(await screen.findByRole('heading', { level: 2, name: 'Run a drill' })).toBeTruthy()
+    const modes = screen.getByRole('radiogroup', { name: 'Failure mode' })
+    const cards = Array.from(modes.querySelectorAll('label'))
+    expect(cards.map((card) => card.querySelector('span')?.textContent)).toEqual([
+      'Latency spike',
+      'Error rate surge',
+      'Memory leak',
+      'CPU saturation',
+      'DB pool exhaustion',
+    ])
+    expect(cards.every((card) => card.querySelector('svg[data-shape]') !== null)).toBe(true)
+    // Five cards sit in two columns, and the last one fills its row so no cell is left empty.
+    expect(modes.className).toContain('grid-cols-2')
+    expect(cards[4]?.className).toContain('last:col-span-2')
+
+    const severity = screen.getByRole('radiogroup', { name: 'Severity' })
+    expect(Array.from(severity.querySelectorAll('label')).map((s) => s.textContent)).toEqual(['Critical', 'Major', 'Minor'])
     expect(screen.queryByLabelText('Admin token')).toBeNull()
   })
 
-  it('sends the form values and the saved token, then confirms and refreshes', async () => {
+  it('sends the form values and the saved token, then confirms in a sentence and refreshes', async () => {
     setAdminToken('s3cret')
     const create = vi.spyOn(api, 'createSimulation').mockResolvedValue({ ...running, id: 'sim_2', service: 'search' })
-    render(<DashboardPage />)
+    renderPage()
 
     fireEvent.change(await screen.findByLabelText('Service'), { target: { value: ' search ' } })
-    fireEvent.change(screen.getByLabelText('Failure mode'), { target: { value: 'cpu_saturation' } })
-    fireEvent.change(screen.getByLabelText('Severity'), { target: { value: 'critical' } })
+    fireEvent.click(screen.getByRole('radio', { name: /^CPU saturation/ }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Critical' }))
     fireEvent.change(screen.getByLabelText('Intensity'), { target: { value: '0.5' } })
-    fireEvent.change(screen.getByLabelText('Duration'), { target: { value: '90s' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Inject failure' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Custom' }))
+    fireEvent.change(screen.getByLabelText('Custom duration'), { target: { value: ' 90s ' } })
+    const before = vi.mocked(api.listSimulations).mock.calls.length
+    fireEvent.click(screen.getByRole('button', { name: 'Start drill' }))
 
     await waitFor(() =>
       expect(create).toHaveBeenCalledWith(
@@ -234,7 +373,8 @@ describe('inject form on the dashboard', () => {
         's3cret',
       ),
     )
-    expect(await screen.findByText(/Started CPU saturation on search\./)).toBeTruthy()
+    expect(await screen.findByText('Started CPU saturation on search.')).toBeTruthy()
+    await waitFor(() => expect(vi.mocked(api.listSimulations).mock.calls.length).toBeGreaterThan(before))
   })
 
   it('shows server validation errors in the line under each field and moves to the first one', async () => {
@@ -244,50 +384,69 @@ describe('inject form on the dashboard', () => {
         'inject: invalid scenario: service must be at most 63 letters, digits, dots, dashes or underscores\ninvalid scenario: duration 5s outside [10s, 30m0s]',
       ),
     )
-    render(<DashboardPage />)
+    renderPage()
 
     const service = await screen.findByLabelText('Service')
     const serviceLine = document.getElementById(service.getAttribute('aria-describedby') ?? '')
-    const duration = screen.getByLabelText('Duration')
+    const duration = screen.getByRole('radiogroup', { name: 'Duration' })
     const durationLine = document.getElementById(duration.getAttribute('aria-describedby') ?? '')
     // The lines exist before anything goes wrong, holding the hints.
     expect(serviceLine?.textContent).toBe('Letters, digits, dots, dashes and underscores.')
-    expect(durationLine?.textContent).toBe('From 10s to 30m, like 90s or 2m.')
+    expect(durationLine?.textContent).toBe('From 10s to 30m.')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Inject failure' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Start drill' }))
 
     await waitFor(() => expect(service.getAttribute('aria-invalid')).toBe('true'))
     // The same lines now hold the errors, so nothing was added to the page and nothing moved.
     expect(serviceLine?.textContent).toBe('Service must be at most 63 letters, digits, dots, dashes or underscores')
     expect(durationLine?.textContent).toBe('Duration 5s outside [10s, 30m0s]')
+    // An error starts with a red dot, so it is not told apart by colour alone.
+    expect(serviceLine?.querySelector('[data-tone="breach"]')).toBeTruthy()
     expect(duration.getAttribute('aria-invalid')).toBe('true')
-    expect(screen.getByLabelText('Severity').getAttribute('aria-invalid')).toBe('false')
+    // The custom field opens with the refused value in it, ready to be fixed.
+    expect((screen.getByLabelText('Custom duration') as HTMLInputElement).value).toBe('2m')
+    expect(screen.getByRole('radiogroup', { name: 'Severity' }).getAttribute('aria-invalid')).toBe('false')
     await waitFor(() => expect(document.activeElement).toBe(service))
   })
 
   it('keeps room for messages, so the form does not jump when one appears', async () => {
     vi.spyOn(api, 'createSimulation').mockRejectedValue(new ApiError(429, 'too many requests, try again in 30 seconds', 30))
-    render(<DashboardPage />)
-    const form = await screen.findByRole('form', { name: 'Inject a failure' })
-    const messages = form.querySelector('[aria-live="polite"]')
-    expect(messages?.className).toContain('min-h-16')
+    renderPage()
+    const form = await screen.findByRole('form', { name: 'Run a drill' })
+    const messages = form.querySelector('[data-feedback]')
+    expect(messages?.className).toContain('min-h-12')
+    expect(messages?.getAttribute('aria-live')).toBe('polite')
     expect(messages?.textContent).toBe('')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Inject failure' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Start drill' }))
 
     expect(await within(form).findByText('Too many requests. You can try again in 30 seconds.')).toBeTruthy()
-    expect(form.querySelector('[aria-live="polite"]')).toBe(messages)
+    expect(form.querySelector('[data-feedback]')).toBe(messages)
     const button = screen.getByRole('button', { name: 'Try again in 30s' })
     expect(button.hasAttribute('disabled')).toBe(true)
   })
 
   it('points at the settings when the admin token is missing', async () => {
     vi.spyOn(api, 'createSimulation').mockRejectedValue(new ApiError(401, 'a valid admin token is required for this request'))
-    render(<DashboardPage />)
+    renderPage()
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Inject failure' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Start drill' }))
 
     expect(await screen.findByText(/Open Settings in the header, enter the token, and try again\./)).toBeTruthy()
+  })
+
+  it('can be folded away below the widest layout', async () => {
+    renderPage()
+    const toggle = await screen.findByRole('button', { name: 'Hide form' })
+    const body = document.getElementById(toggle.getAttribute('aria-controls') ?? '')
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(body?.className ?? '').not.toContain('hidden')
+
+    fireEvent.click(toggle)
+
+    expect(screen.getByRole('button', { name: 'Show form' }).getAttribute('aria-expanded')).toBe('false')
+    // On the widest layout the composer is always shown, whatever the switch says.
+    expect(body?.className).toContain('hidden xl:block')
   })
 })
 
