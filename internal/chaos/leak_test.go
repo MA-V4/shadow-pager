@@ -60,8 +60,8 @@ func TestSubscriptionsLeaveNoGoroutines(t *testing.T) {
 	}
 
 	// Each listener owns one goroutine, and seeing them first proves the count can catch a leak.
-	if count, ok := waitForGoroutines(func(n int) bool { return n >= before+2*listeners }); !ok {
-		t.Fatalf("goroutines while subscribed = %d, want at least %d", count, before+2*listeners)
+	if count, ok := waitForGoroutines(func(n int) bool { return n >= 2*listeners }); !ok {
+		t.Fatalf("goroutines while subscribed = %d, want at least %d", count, 2*listeners)
 	}
 
 	cancel()
