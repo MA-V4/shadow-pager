@@ -43,6 +43,46 @@ export function formatGoDuration(duration: string | undefined | null): string {
   return all.some(({ amount }) => amount > 0) ? 'under 1s' : '0s'
 }
 
+// formatElapsed turns milliseconds into a short length of time, such as 45s, 2m 5s or 1h 2m.
+export function formatElapsed(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) {
+    return '-'
+  }
+  const total = Math.round(ms / 1000)
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const seconds = total % 60
+  if (hours > 0) {
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`
+  }
+  if (minutes > 0) {
+    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`
+  }
+  return `${seconds}s`
+}
+
+// formatAgo says how long ago a server time was, such as 2m ago, with one unit only.
+export function formatAgo(iso: string | undefined | null, nowMs: number): string {
+  const then = iso ? new Date(iso).getTime() : Number.NaN
+  if (Number.isNaN(then)) {
+    return '-'
+  }
+  const seconds = Math.max(0, Math.round((nowMs - then) / 1000))
+  if (seconds < 5) {
+    return 'just now'
+  }
+  if (seconds < 60) {
+    return `${seconds}s ago`
+  }
+  if (seconds < 3600) {
+    return `${Math.floor(seconds / 60)}m ago`
+  }
+  if (seconds < 86_400) {
+    return `${Math.floor(seconds / 3600)}h ago`
+  }
+  return `${Math.floor(seconds / 86_400)}d ago`
+}
+
 // NUMBERS
 
 // The page is written in English, so numbers use English separators for every reader.
