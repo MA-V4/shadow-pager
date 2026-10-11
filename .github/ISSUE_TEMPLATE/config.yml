@@ -1,0 +1,6 @@
+# Security problems go to a private report and never into a public issue.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/MA-V4/shadow-pager/security/advisories/new
+    about: Please report security problems privately. See SECURITY.md for what is in scope.
