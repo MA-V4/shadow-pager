@@ -7,7 +7,7 @@ toolchain go1.26.9
 require (
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/jackc/pgx/v5 v5.11.0
-	github.com/slack-go/slack v0.17.3
+	github.com/slack-go/slack v0.23.1
 )
 
 require (
