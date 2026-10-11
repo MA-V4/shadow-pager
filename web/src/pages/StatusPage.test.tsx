@@ -65,6 +65,11 @@ describe('StatusPage', () => {
     const line = await hero()
     expect(line.textContent).toBe('Major outage')
     expect(line.className).toContain('text-hero')
+    // A quiet grey label right above the big line says that none of this is real.
+    const simulated = screen.getByText('Simulated services')
+    expect(simulated.className).toContain('text-tertiary')
+    expect(simulated.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(simulated.parentElement).toBe(line.parentElement)
     expect(line.querySelector('[data-tone="breach"]')).toBeTruthy()
 
     const services = screen.getByRole('list', { name: 'Services' })
@@ -121,6 +126,7 @@ describe('StatusPage', () => {
     // Green is never used large: the state is a 10px dot, and the words stay in the text colour.
     expect(line.className).toContain('text-primary')
     expect(line.querySelector('[data-tone="ok"]')?.className).toContain('h-2.5')
+    expect(screen.getByText('Simulated services')).toBeTruthy()
     expect(screen.getByText('No active incidents.')).toBeTruthy()
     expect(screen.getByText(/^No services to show yet\./)).toBeTruthy()
     expect(container.innerHTML).not.toContain('border-dashed')

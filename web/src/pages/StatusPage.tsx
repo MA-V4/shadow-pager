@@ -7,6 +7,7 @@ import { SignalDot, type SignalTone } from '../components/SignalDot'
 import { incidentRail, IncidentStatusTag, SeverityTag } from '../components/Tags'
 import { Card } from '../components/ui/card'
 import { Overline } from '../components/ui/overline'
+import { Tag } from '../components/ui/tag'
 import { Skeleton } from '../components/ui/skeleton'
 import { formatAgo, formatDateTime } from '../lib/format'
 import { failureModeLabels, labelOf, serviceLevelLabels } from '../lib/labels'
@@ -148,10 +149,16 @@ export default function StatusPage() {
 
       {page !== undefined && status.phase !== 'error' ? (
         <>
-          <p role="status" aria-live="polite" aria-label="Overall status" className="flex items-start gap-4 text-hero text-primary text-balance">
-            <SignalDot tone={levelTone[page.status] ?? 'neutral'} className="mt-4.25 h-2.5 w-2.5" />
-            {heroLine[page.status] ?? labelOf(serviceLevelLabels, page.status)}
-          </p>
+          <div className="flex flex-col items-start gap-3">
+            {/* This quiet label sits right above the big line, so nobody takes a drill for a real outage. */}
+            <Tag tone="neutral" data-simulated="">
+              Simulated services
+            </Tag>
+            <p role="status" aria-live="polite" aria-label="Overall status" className="flex items-start gap-4 text-hero text-primary text-balance">
+              <SignalDot tone={levelTone[page.status] ?? 'neutral'} className="mt-4.25 h-2.5 w-2.5" />
+              {heroLine[page.status] ?? labelOf(serviceLevelLabels, page.status)}
+            </p>
+          </div>
 
           <section aria-labelledby="services-heading" className="flex flex-col gap-3">
             <Overline as="h2" id="services-heading">
