@@ -11,6 +11,24 @@ export const failureModeLabels: Record<FailureMode, string> = {
   db_pool_exhaustion: 'DB pool exhaustion',
 }
 
+// The same names inside a sentence, where only acronyms keep their capitals.
+export const failureModePhrases: Record<FailureMode, string> = {
+  latency_spike: 'a latency spike',
+  error_rate_surge: 'an error rate surge',
+  memory_leak: 'a memory leak',
+  cpu_saturation: 'CPU saturation',
+  db_pool_exhaustion: 'DB pool exhaustion',
+}
+
+// One short line per failure mode that says what the drill will look like.
+export const failureModeDescriptions: Record<FailureMode, string> = {
+  latency_spike: 'Latency jumps at once and holds.',
+  error_rate_surge: 'Errors climb fast and stay high.',
+  memory_leak: 'Memory grows and never recovers.',
+  cpu_saturation: 'CPU builds slowly, then eases.',
+  db_pool_exhaustion: 'Fine at first, then a sudden collapse.',
+}
+
 export const severityLabels: Record<Severity, string> = {
   critical: 'Critical',
   major: 'Major',
@@ -52,4 +70,19 @@ export function labelOf(labels: Readonly<Record<string, string>>, value: string)
   }
   const spaced = value.replaceAll('_', ' ').trim()
   return spaced === '' ? 'Unknown' : spaced.charAt(0).toUpperCase() + spaced.slice(1)
+}
+
+// SENTENCES
+
+// inSentence makes a label fit the middle of a sentence: the first letter goes small unless the word is an acronym.
+export function inSentence(label: string): string {
+  const first = label.split(' ')[0] ?? ''
+  const acronym = first.length > 1 && first === first.toUpperCase()
+  return acronym ? label : label.charAt(0).toLowerCase() + label.slice(1)
+}
+
+// startedSentence is the line shown after a drill starts, such as "Started an error rate surge on payments-api."
+export function startedSentence(mode: string, service: string): string {
+  const phrase = (failureModePhrases as Readonly<Record<string, string>>)[mode] ?? inSentence(labelOf(failureModeLabels, mode))
+  return `Started ${phrase} on ${service}.`
 }
