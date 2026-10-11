@@ -5,101 +5,109 @@
 
 /*
  * DESIGN TOKENS
- * Every colour, radius and shadow in the app comes from this file, so a new design system only has to change it here.
- * The neutrals are one cool grey family, and colour is kept for meaning: green is healthy, amber is a warning, red is a breach.
+ * These are the Night Shift tokens from web/DESIGN.md section 2, and no component may use a colour that is not here.
  */
 
 /* LIGHT THEME */
 :root {
-  --background: #f6f7f9;
-  --foreground: #0f1319;
-  --card: #ffffff;
-  --card-foreground: #0f1319;
-  --muted: #eceff3;
-  --muted-foreground: #545e6e;
-  --border: #dde1e8;
-  --input: #c3cad6;
-  --ring: #2456c9;
-  --primary: #0f1319;
-  --primary-foreground: #ffffff;
-  --secondary: #e6e9ef;
-  --secondary-foreground: #0f1319;
-  --destructive: #c4272e;
-  --destructive-foreground: #ffffff;
-  --brand: #e5484d;
-  --ok: #177a3e;
-  --warn: #9a5700;
-  --bad: #c4272e;
-  --info: #2456c9;
-  --chart-line: #3b4556;
-  --chart-grid: #e3e6ec;
-  --shadow-card: 0 1px 2px rgb(15 19 25 / 0.05), 0 1px 1px rgb(15 19 25 / 0.03);
-  --shadow-pop: 0 12px 32px rgb(15 19 25 / 0.14), 0 2px 6px rgb(15 19 25 / 0.08);
+  --bg-canvas: #f7f7f5;
+  --bg-surface: #ffffff;
+  --bg-raised: #ffffff;
+  --bg-inset: #f1f1ee;
+  --border-subtle: #e6e5e1;
+  --border-strong: #d3d2cd;
+  --text-primary: #15171a;
+  --text-secondary: #50555d;
+  --text-tertiary: #6e737b;
+  --signal-breach: #d12f3a;
+  --signal-warn: #a86400;
+  --signal-ok: #1e8e5a;
+  --signal-monitor: #4a5fd0;
+  --accent: #2f4fc9;
+  --chart-line: #9a9ea5;
+  --shadow-pop: 0 8px 24px rgb(0 0 0 / 0.08);
 }
 
 /* DARK THEME */
 .dark {
-  --background: #0a0d12;
-  --foreground: #e7eaf0;
-  --card: #10141b;
-  --card-foreground: #e7eaf0;
-  --muted: #171c26;
-  --muted-foreground: #98a2b3;
-  --border: #212835;
-  --input: #303a4c;
-  --ring: #7aa2ff;
-  --primary: #e7eaf0;
-  --primary-foreground: #0a0d12;
-  --secondary: #1b2230;
-  --secondary-foreground: #e7eaf0;
-  --destructive: #ff6369;
-  --destructive-foreground: #14060a;
-  --brand: #ff6369;
-  --ok: #3ecf8e;
-  --warn: #f5b83d;
-  --bad: #ff6369;
-  --info: #7aa2ff;
-  --chart-line: #b4bccb;
-  --chart-grid: #1c2330;
-  --shadow-card: 0 0 0 0 transparent;
-  --shadow-pop: 0 16px 40px rgb(0 0 0 / 0.5), 0 2px 8px rgb(0 0 0 / 0.4);
+  --bg-canvas: #0a0c0f;
+  --bg-surface: #111418;
+  --bg-raised: #171b21;
+  --bg-inset: #0d1013;
+  --border-subtle: #1f242b;
+  --border-strong: #2b323b;
+  --text-primary: #e6e9ed;
+  --text-secondary: #9aa3ae;
+  --text-tertiary: #7a838f;
+  --signal-breach: #f2555a;
+  --signal-warn: #f5a524;
+  --signal-ok: #3fb984;
+  --signal-monitor: #8b9cf4;
+  --accent: #c9d4ff;
+  --chart-line: #6b7480;
+  --shadow-pop: 0 8px 24px rgb(0 0 0 / 0.4);
 }
 
-/* One radius scale for the whole app: 6px for controls, 10px for panels, 14px for the big status banner. */
+/* Tailwind's own palette is switched off, so a stray class such as bg-red-500 simply does not exist. */
 @theme {
+  --color-*: initial;
+  --radius-sm: 4px;
   --radius-md: 6px;
-  --radius-lg: 10px;
-  --radius-xl: 14px;
+  --radius-lg: 8px;
 }
 
-/* These names turn the variables above into Tailwind colours such as bg-card and text-muted-foreground. */
+/* These names turn the tokens into Tailwind classes such as bg-surface, border-subtle and text-secondary. */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-border: var(--border);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-destructive: var(--destructive);
-  --color-destructive-foreground: var(--destructive-foreground);
-  --color-brand: var(--brand);
-  --color-ok: var(--ok);
-  --color-warn: var(--warn);
-  --color-bad: var(--bad);
-  --color-info: var(--info);
-  --shadow-card: var(--shadow-card);
+  --color-canvas: var(--bg-canvas);
+  --color-surface: var(--bg-surface);
+  --color-raised: var(--bg-raised);
+  --color-inset: var(--bg-inset);
+  --color-subtle: var(--border-subtle);
+  --color-strong: var(--border-strong);
+  --color-primary: var(--text-primary);
+  --color-secondary: var(--text-secondary);
+  --color-tertiary: var(--text-tertiary);
+  --color-breach: var(--signal-breach);
+  --color-warn: var(--signal-warn);
+  --color-ok: var(--signal-ok);
+  --color-monitor: var(--signal-monitor);
+  --color-accent: var(--accent);
+  --color-chart-line: var(--chart-line);
   --shadow-pop: var(--shadow-pop);
-  /* The font is one token, so the typeface of a design system can be dropped in with a single change. */
-  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+
+  --font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+
+  /* The type scale from DESIGN.md section 3, as classes such as text-meta and text-readout. */
+  --text-overline: 0.6875rem;
+  --text-overline--line-height: 1rem;
+  --text-overline--font-weight: 500;
+  --text-overline--letter-spacing: 0.08em;
+  --text-meta: 0.75rem;
+  --text-meta--line-height: 1rem;
+  --text-meta--font-weight: 400;
+  --text-body: 0.875rem;
+  --text-body--line-height: 1.25rem;
+  --text-body--font-weight: 400;
+  --text-label: 0.8125rem;
+  --text-label--line-height: 1.125rem;
+  --text-label--font-weight: 500;
+  --text-title: 1rem;
+  --text-title--line-height: 1.5rem;
+  --text-title--font-weight: 600;
+  --text-heading: 1.25rem;
+  --text-heading--line-height: 1.75rem;
+  --text-heading--font-weight: 600;
+  --text-readout: 1.75rem;
+  --text-readout--line-height: 2rem;
+  --text-readout--font-weight: 500;
+  --text-hero: 2.5rem;
+  --text-hero--line-height: 2.75rem;
+  --text-hero--font-weight: 600;
+
   --animate-indeterminate: indeterminate 1.6s ease-in-out infinite;
+  --animate-rail: rail-pulse 2.4s ease-in-out infinite;
+  --animate-sweep: sweep 5s linear infinite;
 }
 
 /* The waking bar slides a short block from left to right to show that something is still happening. */
@@ -112,16 +120,37 @@
   }
 }
 
+/* The rail of a breaching card breathes slowly between full and a little over half strength. */
+@keyframes rail-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* The idle heartbeat is a small mark that drifts along a flat line. */
+@keyframes sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(1100%);
+  }
+}
+
 @layer base {
   * {
-    border-color: var(--border);
+    border-color: var(--border-subtle);
   }
 
   html {
     color-scheme: light;
     -webkit-tap-highlight-color: transparent;
     /* Moving the focus to something near the top must not hide it under the sticky top bar. */
-    scroll-padding-top: 5rem;
+    scroll-padding-top: 4rem;
   }
 
   /* With a mouse or trackpad the page does not bounce past its ends, and touch screens keep pull to refresh. */
@@ -135,11 +164,21 @@
     color-scheme: dark;
   }
 
+  /* On small screens a tab bar sits at the bottom, and the focus must not hide under it either. */
+  @media (max-width: 767px) {
+    html {
+      scroll-padding-bottom: 5rem;
+    }
+  }
+
   body {
-    background-color: var(--background);
-    color: var(--foreground);
+    background-color: var(--bg-canvas);
+    color: var(--text-primary);
     font-family: var(--font-sans);
-    font-feature-settings: 'cv11', 'ss01';
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    /* Every number keeps the same width, so values do not wobble when they change. */
+    font-variant-numeric: tabular-nums;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
     /* On phones with a notch the content stays clear of it when the phone is held sideways. */
@@ -156,28 +195,22 @@
 
   /* Jumping to a heading must not hide it under the top bar. */
   [id] {
-    scroll-margin-top: 5rem;
+    scroll-margin-top: 4rem;
   }
 
   /* Taps answer at once, without the delay that waits for a double tap. */
   a,
   button,
   input,
-  select,
+  label,
   summary,
   [role='button'] {
     touch-action: manipulation;
   }
 
-  /* The built in select gets its own colours, so it stays readable in dark mode on Windows. */
-  select {
-    background-color: var(--background);
-    color: var(--foreground);
-  }
-
-  /* Keyboard users always get a clear outline, on every control. */
+  /* Keyboard users always get a clear ring in the accent colour, on every control. */
   :focus-visible {
-    outline: 2px solid var(--ring);
+    outline: 2px solid var(--accent);
     outline-offset: 2px;
   }
 }
