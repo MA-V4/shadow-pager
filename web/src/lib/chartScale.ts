@@ -79,6 +79,54 @@ export function formatClock(ms: number, timeZone?: string): string {
   }).format(ms)
 }
 
+// SLO LABEL
+
+// How much room the SLO label needs next to its line: its gap, one line of 12px text, and a little air.
+export const sloLabelRoom = 20
+
+// sloLabelSide says where the SLO label goes so that it always stays inside the plot and never reaches an axis label.
+export function sloLabelSide(sloY: number, plotTop: number, plotBottom: number, room = sloLabelRoom): 'below' | 'above' {
+  // Below the line is the first choice, because a breaching metric draws its newest value above it.
+  if (sloY + room <= plotBottom) {
+    return 'below'
+  }
+  // Too close to the time axis, so the label moves above the line, where the plot always has room.
+  return sloY - room >= plotTop ? 'above' : 'below'
+}
+
+// SPARKLINE
+
+export interface SparkPoint {
+  // The time of the value in milliseconds.
+  t: number
+  // The value at that time.
+  v: number
+}
+
+// sparklinePoints turns values into the points of a tiny line that uses its own range, so small changes can be seen.
+export function sparklinePoints(points: readonly SparkPoint[], width: number, height: number): string {
+  const first = points[0]
+  const last = points.at(-1)
+  if (first === undefined || last === undefined || last.t <= first.t) {
+    return ''
+  }
+  const values = points.map((p) => p.v)
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  // The band is never thinner than half the value, so the usual wobble of a calm metric does not look like a storm.
+  const band = Math.max(max - min, Math.abs(max) * 0.5, Number.EPSILON)
+  const low = (min + max) / 2 - band / 2
+  // One and a half pixels are kept free on every side, so the round line ends are never cut off.
+  const pad = 1.5
+  return points
+    .map((p) => {
+      const x = pad + ((p.t - first.t) / (last.t - first.t)) * (width - 2 * pad)
+      const y = height - pad - ((p.v - low) / band) * (height - 2 * pad)
+      return `${x.toFixed(1)},${y.toFixed(1)}`
+    })
+    .join(' ')
+}
+
 // SHARED STYLE
 
 // Every chart uses this one text style on its axes, so all charts read as one family.

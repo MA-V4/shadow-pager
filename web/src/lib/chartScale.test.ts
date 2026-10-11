@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { formatClock, formatRelative, niceStep, relativeTicks, valueScale } from './chartScale'
+import { formatClock, formatRelative, niceStep, relativeTicks, sloLabelRoom, sloLabelSide, sparklinePoints, valueScale } from './chartScale'
 
 describe('niceStep', () => {
   it.each([
@@ -127,5 +127,82 @@ describe('formatClock', () => {
   it('uses a 24 hour clock with seconds', () => {
     expect(formatClock(new Date('2026-01-02T00:04:05Z').getTime(), 'UTC')).toBe('00:04:05')
     expect(formatClock(new Date('2026-01-02T23:59:59Z').getTime(), 'UTC')).toBe('23:59:59')
+  })
+})
+
+describe('sloLabelSide', () => {
+  // The plot of the large chart runs from 8px to 100px, and the time labels sit right below it.
+  const top = 8
+  const bottom = 100
+
+  it.each([
+    [8, 'below'],
+    [50, 'below'],
+    [80, 'below'],
+    [81, 'above'],
+    [95, 'above'],
+    [100, 'above'],
+  ])('puts the label of a line at %dpx %s the line', (sloY, want) => {
+    expect(sloLabelSide(sloY, top, bottom)).toBe(want)
+  })
+
+  it('never lets the label leave the plot, wherever the line is', () => {
+    for (let sloY = top; sloY <= bottom; sloY += 0.5) {
+      const side = sloLabelSide(sloY, top, bottom)
+      const labelTop = side === 'below' ? sloY : sloY - sloLabelRoom
+      const labelBottom = side === 'below' ? sloY + sloLabelRoom : sloY
+      // Staying above the bottom of the plot is what keeps it clear of the time labels, such as "now".
+      expect(labelBottom).toBeLessThanOrEqual(bottom)
+      expect(labelTop).toBeGreaterThanOrEqual(top)
+    }
+  })
+
+  it('stays below the line in a plot too small for either side', () => {
+    expect(sloLabelSide(10, 0, 20)).toBe('below')
+  })
+})
+
+describe('sparklinePoints', () => {
+  const at = (values: number[]) => values.map((v, i) => ({ t: i * 1000, v }))
+  const ys = (line: string) => line.split(' ').map((pair) => Number(pair.split(',')[1]))
+  const xs = (line: string) => line.split(' ').map((pair) => Number(pair.split(',')[0]))
+
+  it('spreads the points evenly from edge to edge and keeps them inside the box', () => {
+    const line = sparklinePoints(at([100, 180, 140, 220, 160]), 64, 20)
+    expect(xs(line)).toEqual([1.5, 16.8, 32, 47.3, 62.5])
+    for (const y of ys(line)) {
+      expect(y).toBeGreaterThanOrEqual(1.5)
+      expect(y).toBeLessThanOrEqual(18.5)
+    }
+  })
+
+  it('uses its own range, so a change far below the limit can still be seen', () => {
+    // These values sit near 120 with a limit of 500, which a scale from zero would draw as a flat line.
+    const y = ys(sparklinePoints(at([100, 160, 100, 160]), 64, 20))
+    expect(Math.max(...y) - Math.min(...y)).toBeGreaterThan(12)
+    // A value that doubles uses the whole height of the box.
+    const doubled = ys(sparklinePoints(at([100, 200]), 64, 20))
+    expect(doubled).toEqual([18.5, 1.5])
+    // A bigger value is drawn higher, which is a smaller y.
+    expect(y[1]).toBeLessThan(y[0] ?? 0)
+  })
+
+  it('keeps the small wobble of a calm metric small and in the middle', () => {
+    const y = ys(sparklinePoints(at([500, 505, 498, 503]), 64, 20))
+    expect(Math.max(...y) - Math.min(...y)).toBeLessThan(2)
+    for (const value of y) {
+      expect(Math.abs(value - 10)).toBeLessThan(1.5)
+    }
+  })
+
+  it('draws a flat line through the middle for values that do not change', () => {
+    expect(ys(sparklinePoints(at([40, 40, 40]), 64, 20))).toEqual([10, 10, 10])
+    expect(ys(sparklinePoints(at([0, 0]), 64, 20))).toEqual([10, 10])
+  })
+
+  it('draws nothing for fewer than two moments', () => {
+    expect(sparklinePoints([], 64, 20)).toBe('')
+    expect(sparklinePoints(at([5]), 64, 20)).toBe('')
+    expect(sparklinePoints([{ t: 5, v: 1 }, { t: 5, v: 2 }], 64, 20)).toBe('')
   })
 })

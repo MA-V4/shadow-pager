@@ -2,7 +2,7 @@ import { useId } from 'react'
 import { Area, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 
 import type { MetricSample } from '../api/types'
-import { axisTick, formatClock, formatRelative, relativeTicks, valueScale } from '../lib/chartScale'
+import { axisTick, formatClock, formatRelative, relativeTicks, sloLabelSide, sparklinePoints, valueScale } from '../lib/chartScale'
 import { tickLabel, type MetricDef } from '../lib/metrics'
 import { Value } from './Value'
 
@@ -55,6 +55,8 @@ export function MetricChart({ def, samples, threshold }: MetricChartProps) {
   const xTicks = first && latest ? relativeTicks(first.t, latest.t) : []
   // How far down the plot the SLO line sits, from 0 at the top to 1 at the bottom.
   const sloOffset = threshold === undefined ? 0 : Math.min(1, Math.max(0, 1 - threshold / scale.max))
+  // The label sits below the line when there is room above the time axis, and above the line when there is not.
+  const labelSide = sloLabelSide(plotTop + sloOffset * (plotBottom - plotTop), plotTop, plotBottom)
 
   return (
     <figure className="flex min-w-0 flex-col gap-2" aria-label={describeMetric(def, latest?.v, threshold)}>
@@ -131,8 +133,7 @@ export function MetricChart({ def, samples, threshold }: MetricChartProps) {
                   strokeDasharray="4 4"
                   label={{
                     value: `SLO ${def.format(threshold)}`,
-                    // The newest value of a breaching metric is above the line, so the label sits just below it.
-                    position: 'insideTopRight',
+                    position: labelSide === 'below' ? 'insideTopRight' : 'insideBottomRight',
                     fontSize: 12,
                     fontFamily: 'var(--font-mono)',
                     fill: 'var(--text-secondary)',
@@ -161,20 +162,8 @@ const sparkWidth = 64
 const sparkHeight = 20
 
 // Sparkline is a 64 by 20 line of where a healthy metric has been, with no axes and no colour.
-export function Sparkline({ points, max }: { points: readonly MetricPoint[]; max: number }) {
-  const first = points[0]
-  const last = points.at(-1)
-  const span = first && last ? last.t - first.t : 0
-  const line =
-    first === undefined || span <= 0 || max <= 0
-      ? ''
-      : points
-          .map((p) => {
-            const x = 1 + ((p.t - first.t) / span) * (sparkWidth - 2)
-            const y = sparkHeight - 1 - Math.min(1, Math.max(0, p.v / max)) * (sparkHeight - 2)
-            return `${x.toFixed(1)},${y.toFixed(1)}`
-          })
-          .join(' ')
+export function Sparkline({ points }: { points: readonly MetricPoint[] }) {
+  const line = sparklinePoints(points, sparkWidth, sparkHeight)
   return (
     <svg
       aria-hidden="true"
@@ -188,7 +177,7 @@ export function Sparkline({ points, max }: { points: readonly MetricPoint[]; max
       strokeLinejoin="round"
       className="shrink-0 text-tertiary"
     >
-      {line === '' ? <path d={`M1 ${sparkHeight / 2}H${sparkWidth - 1}`} strokeDasharray="1 4" /> : <polyline points={line} />}
+      {line === '' ? <path d={`M1.5 ${sparkHeight / 2}H${sparkWidth - 1.5}`} strokeDasharray="1 4" /> : <polyline points={line} />}
     </svg>
   )
 }
@@ -199,21 +188,21 @@ export function Sparkline({ points, max }: { points: readonly MetricPoint[]; max
 export function MetricRow({ def, samples, threshold }: MetricChartProps) {
   const points = toPoints(samples, def)
   const latest = points.at(-1)
-  const scale = valueScale(Math.max(0, ...points.map((p) => p.v)), threshold)
 
   return (
-    <figure className="flex min-w-0 items-end justify-between gap-2 py-2" aria-label={describeMetric(def, latest?.v, threshold)}>
-      <figcaption className="flex min-w-0 flex-col">
-        <span className="text-meta whitespace-nowrap text-tertiary">{def.label}</span>
+    <figure className="flex min-w-0 flex-col gap-1 py-2" aria-label={describeMetric(def, latest?.v, threshold)}>
+      <figcaption className="text-meta whitespace-nowrap text-tertiary">{def.label}</figcaption>
+      {/* The value keeps one width in every cell, so the tiny lines start at the same place and read as one row. */}
+      <div className="flex min-w-0 items-center gap-3">
         {latest === undefined ? (
-          <span className="text-body text-tertiary">Waiting…</span>
+          <span className="text-body text-tertiary lg:w-24">Waiting…</span>
         ) : (
-          <Value text={def.format(latest.v)} className="text-body text-primary" />
+          <Value text={def.format(latest.v)} className="text-body text-primary lg:w-24" />
         )}
-      </figcaption>
-      {/* On a narrow phone the tiny line gives way before the number does. */}
-      <div className="flex min-w-0 flex-1 justify-end overflow-hidden">
-        <Sparkline points={points} max={scale.max} />
+        {/* On a narrow phone the tiny line gives way before the number does. */}
+        <div className="flex min-w-0 overflow-hidden">
+          <Sparkline points={points} />
+        </div>
       </div>
     </figure>
   )
