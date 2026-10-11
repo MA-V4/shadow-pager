@@ -6,7 +6,7 @@ import type { Incident } from '../api/types'
 import { useResource } from '../api/useResource'
 import { EmptyState, ErrorNotice, LoadingBlock, WakingNotice } from '../components/Notice'
 import { ShapeGlyph } from '../components/ShapeGlyph'
-import { incidentRail, IncidentStatusTag, SeverityTag } from '../components/Tags'
+import { incidentRail, IncidentStatusTag, PublicTag, SeverityTag } from '../components/Tags'
 import { Card } from '../components/ui/card'
 import { Overline } from '../components/ui/overline'
 import { formatClock } from '../lib/chartScale'
@@ -91,6 +91,7 @@ function IncidentView({ incident }: { incident: Incident }) {
             </h1>
             <IncidentStatusTag status={incident.status} />
             <SeverityTag severity={incident.severity} />
+            {incident.public ? <PublicTag /> : null}
           </div>
           <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-body text-secondary">
             <ShapeGlyph mode={incident.mode} />

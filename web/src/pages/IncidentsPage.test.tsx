@@ -22,6 +22,7 @@ const open: Incident = {
   acknowledged_by: '<@U123ABC>',
   time_to_acknowledge: '1m30s',
   slack_channel_id: 'C123',
+  public: false,
   timeline: [
     { at: '2026-01-02T15:04:05Z', actor: 'shadow-pager', text: 'Incident declared' },
     { at: '2026-01-02T15:05:35Z', actor: '<@U123ABC>', text: 'Acknowledged' },
@@ -90,6 +91,22 @@ describe('IncidentsPage', () => {
 
     // The open list comes before the resolved one on the page.
     expect(openList.compareDocumentPosition(resolvedList) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('tags the incident of a public drill in the list and on its own page', async () => {
+    const visitor: Incident = { ...open, id: 'inc_public', public: true }
+    vi.spyOn(api, 'listIncidents').mockResolvedValue({ incidents: [visitor, open] })
+    vi.spyOn(api, 'getIncident').mockResolvedValue(visitor)
+
+    const list = renderAt('/incidents')
+    const rows = within(await screen.findByRole('list', { name: 'Open' })).getAllByRole('link')
+    expect(within(rows[0] as HTMLElement).getByText('Public drill').className).toContain('text-tertiary')
+    expect(within(rows[1] as HTMLElement).queryByText('Public drill')).toBeNull()
+    list.unmount()
+
+    renderAt('/incidents/inc_public')
+    await screen.findByRole('heading', { level: 1, name: 'inc_public' })
+    expect(screen.getByText('Public drill')).toBeTruthy()
   })
 
   it('leaves out a section that has nothing in it', async () => {

@@ -37,6 +37,7 @@ function runningSimulation(id: string, service: string): Simulation {
     state: 'running',
     started_at: new Date(now - 30_000).toISOString(),
     ends_at: new Date(now + 90_000).toISOString(),
+    public: false,
   }
 }
 
@@ -76,6 +77,7 @@ function incidentFor(id: string, simulationId: string): Incident {
     status: 'mitigated',
     breaches: ['cpu'],
     declared_at: new Date().toISOString(),
+    public: false,
     timeline: [],
   }
 }
@@ -106,6 +108,7 @@ beforeEach(() => {
   vi.spyOn(api, 'getSlo').mockResolvedValue({ max_latency_p99_ms: 500, max_error_rate: 0.01, max_cpu_percent: 90, max_memory_mb: 2048 })
   vi.spyOn(api, 'listSimulations').mockResolvedValue({ simulations: [running, halted] })
   vi.spyOn(api, 'listIncidents').mockResolvedValue({ incidents: [] })
+  vi.spyOn(api, 'getConfig').mockResolvedValue({ public_drills: false })
 })
 
 afterEach(() => {
@@ -264,6 +267,51 @@ describe('DashboardPage', () => {
     act(() => pushSample(sample(120, true, 'sim_from_slack')))
 
     await waitFor(() => expect(vi.mocked(api.listSimulations).mock.calls.length).toBe(before + 1))
+  })
+})
+
+// PUBLIC DRILL TESTS
+
+describe('public drills on the dashboard', () => {
+  it('tags a drill that a visitor started, in plain grey, and leaves an admin drill untagged', async () => {
+    const visitor = { ...runningSimulation('sim_public', 'checkout'), public: true }
+    vi.mocked(api.listSimulations).mockResolvedValue({ simulations: [running, visitor] })
+    renderPage()
+
+    const publicPanel = await screen.findByRole('article', { name: 'CPU saturation on checkout' })
+    const tag = within(publicPanel).getByText('Public drill')
+    expect(tag.className).toContain('text-tertiary')
+    expect(tag.className).not.toContain('breach')
+
+    const adminPanel = screen.getByRole('article', { name: 'CPU saturation on payments-api' })
+    expect(within(adminPanel).queryByText('Public drill')).toBeNull()
+  })
+
+  it('explains public drills in one quiet line, only on a server that allows them', async () => {
+    vi.mocked(api.getConfig).mockResolvedValue({ public_drills: true })
+    const { container } = renderPage()
+
+    const link = await screen.findByRole('link', { name: 'How the live demo works' })
+    expect(link.getAttribute('href')).toBe('https://github.com/MA-V4/shadow-pager#live-demo')
+    // A link that opens another site must not hand that site a way back into this page.
+    expect(link.getAttribute('rel')).toBe('noreferrer')
+    const note = container.querySelector('[data-public-note]')
+    expect(note?.textContent).toContain('do not post to Slack')
+    expect(note?.className).toContain('text-meta')
+  })
+
+  it('says nothing about public drills on a server that does not allow them, or that cannot say', async () => {
+    const { container, unmount } = renderPage()
+    await screen.findByRole('article', { name: 'CPU saturation on payments-api' })
+    expect(container.querySelector('[data-public-note]')).toBeNull()
+    unmount()
+
+    vi.mocked(api.getConfig).mockRejectedValue(new ApiError(500, 'internal server error'))
+    const second = renderPage()
+    await screen.findByRole('article', { name: 'CPU saturation on payments-api' })
+    expect(second.container.querySelector('[data-public-note]')).toBeNull()
+    // The rest of the dashboard must not care that this small question failed.
+    expect(screen.getByRole('button', { name: 'Start drill' })).toBeTruthy()
   })
 })
 
@@ -446,7 +494,7 @@ describe('drill composer on the dashboard', () => {
 
     expect(screen.getByRole('button', { name: 'Show form' }).getAttribute('aria-expanded')).toBe('false')
     // On the widest layout the composer is always shown, whatever the switch says.
-    expect(body?.className).toContain('hidden xl:block')
+    expect(body?.className).toContain('hidden xl:flex')
   })
 })
 

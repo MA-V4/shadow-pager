@@ -2,6 +2,7 @@ import type {
   CreateSimulationRequest,
   Incident,
   IncidentList,
+  ServerConfig,
   Simulation,
   SimulationList,
   Slo,
@@ -131,6 +132,8 @@ export const api = {
   getStatus: (signal?: AbortSignal) => request<StatusPage>('/status', { signal }),
 
   getSlo: (signal?: AbortSignal) => request<Slo>('/slo', { signal }),
+
+  getConfig: (signal?: AbortSignal) => request<ServerConfig>('/config', { signal }),
 
   // streamUrl is the address of the live metric stream, for all simulations or for one.
   streamUrl: (simulationId?: string) =>

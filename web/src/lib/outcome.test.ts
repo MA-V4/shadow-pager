@@ -15,6 +15,7 @@ function incident(id: string, simulationId: string): Incident {
     status: 'resolved',
     breaches: ['latency_p99'],
     declared_at: '2026-01-02T15:04:05Z',
+    public: false,
     timeline: [],
   }
 }

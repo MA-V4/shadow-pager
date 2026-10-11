@@ -28,6 +28,9 @@ const refreshMs = 5_000
 // How often the incidents are fetched again, so a finished simulation can link to the incident it caused.
 const incidentsRefreshMs = 10_000
 
+// Where the README explains public and admin drills.
+const liveDemoUrl = 'https://github.com/MA-V4/shadow-pager#live-demo'
+
 // plural picks the right word for a count, so the page never says "1 simulations".
 function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`
@@ -65,6 +68,7 @@ export default function DashboardPage() {
   const simulations = useResource((signal) => api.listSimulations(signal), 'simulations', { refreshMs })
   const incidents = useResource((signal) => api.listIncidents(signal), 'incidents', { refreshMs: incidentsRefreshMs })
   const slo = useResource((signal) => api.getSlo(signal), 'slo')
+  const config = useResource((signal) => api.getConfig(signal), 'config')
   const [history, setHistory] = useState<SampleHistory>({})
   const [peaks, setPeaks] = useState<Peaks>({})
   // Below the widest layout the composer can be folded away, so it does not push a breach down the page.
@@ -170,7 +174,16 @@ export default function DashboardPage() {
                 {composerOpen ? 'Hide form' : 'Show form'}
               </button>
             </div>
-            <div id="drill-form" className={cn(!composerOpen && 'hidden xl:block')}>
+            <div id="drill-form" className={cn('flex flex-col gap-4', !composerOpen && 'hidden xl:flex')}>
+              {/* This one quiet line is only shown on a server that lets visitors start drills. */}
+              {config.data?.public_drills === true ? (
+                <p className="text-meta text-tertiary" data-public-note="">
+                  Drills started without an admin token are public and do not post to Slack.{' '}
+                  <a href={liveDemoUrl} target="_blank" rel="noreferrer" className="rounded-sm text-secondary underline underline-offset-4 hover:text-primary">
+                    How the live demo works
+                  </a>
+                </p>
+              ) : null}
               <DrillComposer onStarted={reload} runningIds={runningIds} />
             </div>
           </Card>

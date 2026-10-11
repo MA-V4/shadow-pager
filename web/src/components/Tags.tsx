@@ -25,6 +25,11 @@ export function SeverityTag({ severity }: { severity: string }) {
   return <Tag tone={severityTone[severity] ?? 'neutral'}>{labelOf(severityLabels, severity)}</Tag>
 }
 
+// PublicTag marks a drill that a visitor started, in plain grey because it is a fact and not a warning.
+export function PublicTag() {
+  return <Tag tone="neutral">Public drill</Tag>
+}
+
 // IncidentStatusTag shows which step an incident has reached.
 export function IncidentStatusTag({ status }: { status: string }) {
   return <Tag tone={incidentStatusTone[status] ?? 'neutral'}>{labelOf(incidentStatusLabels, status)}</Tag>

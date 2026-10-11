@@ -5,7 +5,7 @@ import type { Incident } from '../api/types'
 import { useResource } from '../api/useResource'
 import { EmptyState, ErrorNotice, LoadingBlock, WakingNotice } from '../components/Notice'
 import { ShapeGlyph } from '../components/ShapeGlyph'
-import { IncidentStatusTag, SeverityTag } from '../components/Tags'
+import { IncidentStatusTag, PublicTag, SeverityTag } from '../components/Tags'
 import { Overline } from '../components/ui/overline'
 import { connectionOf, useReportConnection } from '../lib/connection'
 import { formatAgo, formatDateTime } from '../lib/format'
@@ -39,6 +39,7 @@ function IncidentRow({ incident, now }: { incident: Incident; now: number }) {
           <span className="truncate">{labelOf(failureModeLabels, incident.mode)}</span>
         </span>
         <span className="order-5 flex items-center gap-2 lg:order-0 lg:justify-end">
+          {incident.public ? <PublicTag /> : null}
           <SeverityTag severity={incident.severity} />
           {/* A row under "Resolved" does not repeat that word, and an open row says how far along it is. */}
           {open ? <IncidentStatusTag status={incident.status} /> : null}

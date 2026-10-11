@@ -18,6 +18,7 @@ const created: Simulation = {
   state: 'running',
   started_at: '2026-01-02T15:04:05Z',
   ends_at: '2026-01-02T15:06:05Z',
+  public: false,
 }
 
 const sentence = 'Started an error rate surge on payments-api.'

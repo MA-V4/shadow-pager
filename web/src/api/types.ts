@@ -50,6 +50,8 @@ export interface Simulation {
   ends_at: string
   // Missing while the simulation is still running.
   ended_at?: string
+  // True when a visitor started it without the admin token, so it never posts to Slack.
+  public: boolean
 }
 
 export interface SimulationList {
@@ -107,11 +109,21 @@ export interface Incident {
   time_to_acknowledge?: string
   time_to_resolve?: string
   slack_channel_id?: string
+  // True when the drill behind it was started by a visitor, so Slack was never told.
+  public: boolean
   timeline: TimelineEntry[]
 }
 
 export interface IncidentList {
   incidents: Incident[]
+}
+
+// SERVER CONFIG
+
+// ServerConfig is the answer of GET /config, the few things about the server that change what the page shows.
+export interface ServerConfig {
+  // True when visitors may start drills without the admin token.
+  public_drills: boolean
 }
 
 // PUBLIC STATUS

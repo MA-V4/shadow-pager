@@ -16,6 +16,7 @@ function simulation(id: string, service: string, startedAt = '2026-01-02T15:04:0
     state: 'running',
     started_at: startedAt,
     ends_at: '2026-01-02T15:06:05Z',
+    public: false,
   }
 }
 

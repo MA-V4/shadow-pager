@@ -9,7 +9,7 @@ import { failureModeLabels, labelOf } from '../lib/labels'
 import { ShapeGlyph } from './ShapeGlyph'
 import { SignalDot } from './SignalDot'
 import { SimulationCharts } from './SimulationCharts'
-import { SeverityTag } from './Tags'
+import { PublicTag, SeverityTag } from './Tags'
 import { Button } from './ui/button'
 
 // PROGRESS
@@ -71,6 +71,7 @@ export function SimulationPanel({ simulation, samples, slo, breaching, token, no
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
           <SeverityTag severity={simulation.severity} />
+          {simulation.public ? <PublicTag /> : null}
           <span className="flex min-w-0 items-center gap-2">
             <ShapeGlyph mode={simulation.mode} />
             <h4 className="truncate text-label text-primary">{mode}</h4>
