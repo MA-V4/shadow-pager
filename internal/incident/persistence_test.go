@@ -165,6 +165,8 @@ func TestManagerKeepsWorkingWhenStoreFails(t *testing.T) {
 	}
 	h.sample("sim_1", "latency_p99", "cpu")
 	h.event(chaos.EventSimulationHalted, "sim_1")
+	// The halt must be fully handled first, or Resolve can win the race and the mitigated line is never written.
+	h.settle()
 	if _, err := h.manager.Resolve(ctx, inc.ID, "ada"); err != nil {
 		t.Fatalf("Resolve with a failing store: %v", err)
 	}
