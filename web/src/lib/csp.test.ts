@@ -106,7 +106,7 @@ describe('vercel.json', () => {
   it('sends the security headers with every file', () => {
     expect(header('X-Content-Type-Options')).toBe('nosniff')
     expect(header('Referrer-Policy')).toBe('strict-origin-when-cross-origin')
-    expect(header('X-Frame-Options')).toBe('undefined')
+    expect(header('X-Frame-Options')).toBeUndefined()
   })
 
   it('tells browsers to insist on HTTPS for one year, on every subdomain too', () => {
