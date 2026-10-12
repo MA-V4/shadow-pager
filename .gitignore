@@ -1,5 +1,45 @@
+# GO
 bin/
-.env
+*.exe
 *.test
-coverage.out
+*.out
+*.prof
+coverage.*
+go.work
+go.work.sum
+
+# SECRETS
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# WEB
+node_modules/
+dist/
+.vite/
+coverage/
+npm-debug.log*
+
+# DEPLOY TOOLS
+.vercel/
+
+# CLAUDE CODE
 CLAUDE.md
+.claude/settings.local.json
+
+# RECORDINGS
+*.stg
+
+# EDITORS AND OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# LOGS AND SCRATCH
+*.log
+tmp/
+vercel.json
