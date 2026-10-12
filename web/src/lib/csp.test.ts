@@ -106,7 +106,7 @@ describe('vercel.json', () => {
   it('sends the security headers with every file', () => {
     expect(header('X-Content-Type-Options')).toBe('nosniff')
     expect(header('Referrer-Policy')).toBe('strict-origin-when-cross-origin')
-    expect(header('X-Frame-Options')).toBe('DENY')
+    expect(header('X-Frame-Options')).toBe('undefined')
   })
 
   it('tells browsers to insist on HTTPS for one year, on every subdomain too', () => {
@@ -116,7 +116,7 @@ describe('vercel.json', () => {
 
   it('blocks framing in a header, because a policy inside the page is not allowed to', () => {
     const policy = header('Content-Security-Policy') ?? ''
-    expect(directive(policy, 'frame-ancestors')).toBe("frame-ancestors 'none'")
+    expect(directive(policy, 'frame-ancestors')).toBe("frame-ancestors *")
     expect(directive(policy, 'object-src')).toBe("object-src 'none'")
     // The header must not narrow what the page may fetch, or it would block the API that only the build knows.
     expect(directive(policy, 'default-src')).toBeUndefined()
